@@ -1,4 +1,4 @@
-"""Required keys for every plugin's ``default_config()`` and merged runtime config."""
+"""Base config model shared by all plugins; each plugin defines a subclass for its own fields."""
 
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ def parse_dither_mode_value(v: Any) -> DitherMode:
     raise ValueError(f"Invalid dither_mode: {v!r}")
 
 
-class PluginDefaultConfig(BaseModel):
-    """Every plugin must include these keys in ``default_config()``; more keys are allowed."""
+class PluginBaseConfig(BaseModel):
+    """Shared base fields; subclass per plugin for typed plugin-specific keys."""
 
     refresh_interval_seconds: int = Field(..., gt=0)
     dither_mode: Annotated[
@@ -35,8 +35,3 @@ class PluginDefaultConfig(BaseModel):
     def _dither_mode_json(self, v: DitherMode) -> str:
         """JSON responses use ``DitherMode`` member names (e.g. ``FLOYD_STEINBERG``)."""
         return v.name
-
-
-def validate_plugin_defaults(data: dict[str, Any]) -> None:
-    """Raise ``ValidationError`` if a plugin's ``default_config()`` is missing required keys."""
-    PluginDefaultConfig.model_validate(data)

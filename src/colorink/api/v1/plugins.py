@@ -5,13 +5,17 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from colorink import db
 from colorink.db import DeviceRow
 from colorink.deps import get_connection, require_device
 from colorink.plugins.registry import all_plugins, get_plugin
-from colorink.services.generation import merged_plugin_config, run_generation
+from colorink.services.generation import run_generation
+from colorink.services.plugin_config import (
+    merge_and_validate_plugin_config,
+    merge_and_validate_plugin_config_from_db,
+)
 
 router = APIRouter(prefix="/plugins", tags=["plugins"])
 
@@ -33,12 +37,49 @@ class GenerateResponse(BaseModel):
     next_update_at: str
 
 
+@router.get("/{plugin_slug}/config", response_model=dict[str, Any])
+def get_plugin_config_endpoint(
+    plugin_slug: str,
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+) -> dict[str, Any]:
+    """Merged plugin config (defaults plus stored overrides)."""
+    plugin = get_plugin(plugin_slug)
+    if plugin is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown plugin")
+    cfg = merge_and_validate_plugin_config_from_db(conn, plugin)
+    return cfg.model_dump(mode="json")
+
+
+@router.put("/{plugin_slug}/config", response_model=dict[str, Any])
+def put_plugin_config(
+    plugin_slug: str,
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+    body: Annotated[dict[str, Any], Body(...)],
+) -> dict[str, Any]:
+    """Replace stored overrides for this plugin. Send ``{}`` to clear overrides (defaults only).
+
+    Validation uses the merge of plugin defaults and the request body; only the body is persisted
+    as overrides (same as ``{**defaults, **stored}`` at read time).
+    """
+    plugin = get_plugin(plugin_slug)
+    if plugin is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown plugin")
+    try:
+        cfg = merge_and_validate_plugin_config(plugin, body)
+    except ValidationError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors(include_url=False),
+        ) from exc
+    db.upsert_plugin_config(conn, plugin_slug, body)
+    return cfg.model_dump(mode="json")
+
+
 @router.get("", response_model=list[PluginInfo])
 def list_plugins(conn: Annotated[sqlite3.Connection, Depends(get_connection)]) -> list[PluginInfo]:
     out: list[PluginInfo] = []
     for p in all_plugins():
-        defaults = p.default_config()
-        cfg = merged_plugin_config(conn, p.slug, defaults).model_dump(mode="json")
+        cfg = merge_and_validate_plugin_config_from_db(conn, p).model_dump(mode="json")
         out.append(PluginInfo(slug=p.slug, title=p.title, config=cfg))
     return out
 

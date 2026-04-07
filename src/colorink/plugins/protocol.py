@@ -5,6 +5,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from epaper_dithering import ColorScheme
 
+from colorink.plugins.config import PluginBaseConfig
+
 
 @dataclass(frozen=True, slots=True)
 class DeviceContext:
@@ -23,8 +25,12 @@ class ImagePlugin(Protocol):
     slug: str
     title: str
 
+    def config_model(self) -> type[PluginBaseConfig]:
+        """Pydantic model class for merged runtime config (base fields + plugin-specific fields)."""
+        ...
+
     def default_config(self) -> dict[str, Any]:
-        """Must satisfy ``PluginDefaultConfig`` (required keys + any plugin-specific keys)."""
+        """Must validate against :meth:`config_model`."""
         ...
 
     def fetch_data(self, plugin_config: dict[str, Any], device: DeviceContext) -> Any: ...

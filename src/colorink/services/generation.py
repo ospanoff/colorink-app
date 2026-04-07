@@ -2,25 +2,14 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import timedelta
-from typing import Any
 
 from colorink import db
 from colorink.db import DeviceRow, iso, parse_iso, utc_now
 from colorink.dithering import png_bytes_to_dithered_bmp
 from colorink.epaper_str_enums import color_scheme_name_from_stored, to_lib_color_scheme
-from colorink.plugins.config import PluginDefaultConfig
 from colorink.plugins.protocol import DeviceContext
 from colorink.plugins.registry import get_plugin
-
-
-def merged_plugin_config(
-    conn: sqlite3.Connection,
-    slug: str,
-    defaults: dict[str, Any],
-) -> PluginDefaultConfig:
-    stored = db.get_plugin_config(conn, slug)
-    merged = {**defaults, **stored}
-    return PluginDefaultConfig.model_validate(merged)
+from colorink.services.plugin_config import merge_and_validate_plugin_config_from_db
 
 
 def run_generation(
@@ -35,8 +24,7 @@ def run_generation(
     if plugin is None:
         raise ValueError("unknown_plugin")
 
-    defaults = plugin.default_config()
-    cfg_model = merged_plugin_config(conn, plugin_slug, defaults)
+    cfg_model = merge_and_validate_plugin_config_from_db(conn, plugin)
     cfg_raw = cfg_model.model_dump(mode="python")
     interval = cfg_model.refresh_interval_seconds
 

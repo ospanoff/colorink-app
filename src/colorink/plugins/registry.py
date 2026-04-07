@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from colorink.plugins.builtin.hello import HelloPlugin
-from colorink.plugins.config import validate_plugin_defaults
-from colorink.plugins.protocol import ImagePlugin
+from typing import cast
 
-PLUGINS: list[ImagePlugin] = [
-    HelloPlugin(),
-]
+from colorink.plugins.builtin.hello import HelloPlugin
+from colorink.plugins.protocol import ImagePlugin
+from colorink.services.plugin_config import merge_and_validate_plugin_config
+
+PLUGINS: list[ImagePlugin] = cast(list[ImagePlugin], [HelloPlugin()])
 
 for _plugin in PLUGINS:
-    validate_plugin_defaults(_plugin.default_config())
+    merge_and_validate_plugin_config(_plugin, {})
 
 
 def get_plugin(slug: str) -> ImagePlugin | None:
