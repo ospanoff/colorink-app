@@ -1,0 +1,42 @@
+[project]
+name = "colorink"
+version = "0.1.0"
+description = "E-paper image plugin service (POC)"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "epaper-dithering>=0.6.4",
+    "fastapi>=0.115.0",
+    "granian>=2.0.0",
+    "httpx>=0.28.0",
+    "jinja2>=3.1.0",
+    "pillow>=10.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "granian[reload]>=2.0.0",
+    "pre-commit>=4.0.0",
+    "ruff>=0.8.0",
+    "ty>=0.0.1a1",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.3,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ty]
+# ty discovers src/ by default when run from project root
