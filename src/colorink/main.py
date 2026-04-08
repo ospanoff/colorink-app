@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,6 +13,15 @@ from colorink.deps import get_settings
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _root = logging.getLogger()
+    if not _root.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(levelname)s %(name)s: %(message)s",
+            stream=sys.stderr,
+        )
+    logging.getLogger("colorink").setLevel(logging.INFO)
+
     settings = get_settings()
     conn = db.connect(settings.database_path)
     db.init_schema(conn)
