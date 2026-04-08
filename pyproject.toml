@@ -10,7 +10,6 @@ dependencies = [
     "granian>=2.0.0",
     "httpx>=0.28.0",
     "icalendar>=7.0.3",
-    "jinja2>=3.1.0",
     "pillow>=10.0.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
