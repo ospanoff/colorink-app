@@ -44,7 +44,7 @@ def _draw_rgby_corner_circles(
     r = _corner_circle_radius(width, height)
     d = 2 * r
     m = max(2, r // 6)
-    # Row-major RGBY: R·G / B·Y
+    # Row-major RGBY: R G / B Y
     specs: list[tuple[tuple[int, int, int, int], tuple[int, int, int]]] = [
         ((m, m, m + d, m + d), (255, 0, 0)),
         ((width - m - d, m, width - m, m + d), (0, 255, 0)),

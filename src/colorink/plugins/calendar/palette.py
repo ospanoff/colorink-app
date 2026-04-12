@@ -8,7 +8,7 @@ _HEADER_TEXT = (45, 45, 45)
 _WEEKDAY_LABEL = (90, 90, 90)
 _DAY_IN_MONTH = (25, 25, 25)
 _DAY_OTHER_MONTH = (200, 200, 200)
-# Soft grid (was ~220). If Floyd–Steinberg hides lines on device, prefer dither_mode NONE.
+# Soft grid (was ~220). If Floyd-Steinberg hides lines on device, prefer dither_mode NONE.
 _GRID_LINE = (186, 186, 190)
 _WEEKDAY_CELL_BG = (255, 255, 255)
 # Sat/Sun columns (Mon-first week); matches header strip tint.

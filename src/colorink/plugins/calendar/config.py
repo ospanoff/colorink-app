@@ -34,7 +34,7 @@ class CalendarPluginConfig(PluginBaseConfig):
         default=None,
         ge=1,
         le=12,
-        description="Month 1–12 (with test_year). Omit both for current UTC month.",
+        description="Month 1-12 (with test_year). Omit both for current UTC month.",
     )
 
     @field_validator("timezone")

@@ -180,12 +180,12 @@ def events_by_day_from_ics(
     month: int,
     tz: ZoneInfo,
 ) -> tuple[dict[date, list[IcsEventRow]], list[MultidaySpanDict]]:
-    """Map local dates to events for the **visible month grid** (Mon–Sun weeks).
+    """Map local dates to events for the **visible month grid** (Mon-Sun weeks).
 
     **All-day** instances (``DTSTART`` is a ``DATE``) use one path: clipped to the grid and
     emitted to ``multiday_spans`` (``start``/``end`` inclusive may be the same day).
 
-    **Timed** instances use ``events_by_day`` — once per day if they span multiple local days.
+    **Timed** instances use ``events_by_day`` - once per day if they span multiple local days.
     """
     cal = Calendar.from_ical(ics_bytes)
     query = of(cal, skip_bad_series=True)

@@ -461,7 +461,7 @@ def _draw_month_title_and_weekday_row(
     month: int,
     fonts: MonthFonts,
 ) -> tuple[float, float]:
-    """Draw ``Month YYYY`` and Mon–Sun labels.
+    """Draw ``Month YYYY`` and Mon-Sun labels.
 
     Returns ``(grid_top_y, column_width)`` for the week grid below.
     """

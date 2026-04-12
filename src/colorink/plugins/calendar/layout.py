@@ -139,7 +139,7 @@ def _event_row_slots_in_cell(
 
 
 def _reserved_px_for_column_bar_count(k: int, bar_h: int, bar_gap: int) -> float:
-    """Vertical space for ``k`` stacked multiday bars (``k == 0`` → none)."""
+    """Vertical space for ``k`` stacked multiday bars (``k == 0`` -> none)."""
     if k <= 0:
         return 0.0
     return float(k * bar_h + (k - 1) * bar_gap)

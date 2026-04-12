@@ -9,7 +9,7 @@ from PIL import ImageDraw, ImageFont
 
 from colorink.plugins.calendar.palette import _EVENT_LINE_STEP_FACTOR
 
-# Bundled Noto Sans (SIL OFL) — same family for regular vs bold; see fonts/OFL.txt
+# Bundled Noto Sans (SIL OFL) - same family for regular vs bold; see fonts/OFL.txt
 _FONTS_DIR = Path(__file__).resolve().parent / "fonts"
 _NOTO_REGULAR = _FONTS_DIR / "NotoSans-Regular.ttf"
 _NOTO_BOLD = _FONTS_DIR / "NotoSans-Bold.ttf"
@@ -79,7 +79,7 @@ def _truncate_to_width(
         return ""
     if draw.textlength(text, font=font) <= max_w:
         return text
-    ell = "…"
+    ell = "..."
     lo, hi = 0, len(text)
     while lo < hi:
         mid = (lo + hi + 1) // 2
