@@ -28,7 +28,7 @@ class IcsEventRow(TypedDict):
 
 
 class MultidaySpanDict(TypedDict):
-    """One multi-day instance; ``end`` is inclusive (last calendar day)."""
+    """One all-day span; ``end`` is inclusive (``start`` may equal ``end`` for a single day)."""
 
     title: str
     time: str | None
@@ -126,14 +126,10 @@ def events_by_day_from_ics(
 ) -> tuple[dict[date, list[IcsEventRow]], list[MultidaySpanDict]]:
     """Map local dates to events for the **visible month grid** (Mon–Sun weeks).
 
-    Single-calendar-day instances go into ``events_by_day``. **All-day** multi-day
-    instances (``DTSTART`` is a ``DATE``) are listed in ``multiday_spans`` (one entry per
-    instance) and drawn as week-spanning bars — they are not duplicated into
-    ``events_by_day``.
+    **All-day** instances (``DTSTART`` is a ``DATE``) use one path: clipped to the grid and
+    emitted to ``multiday_spans`` (``start``/``end`` inclusive may be the same day).
 
-    Timed events that span more than one **local** calendar day are listed in
-    ``events_by_day`` once per affected day (same time label from ``DTSTART``); they never
-    appear in ``multiday_spans``.
+    **Timed** instances use ``events_by_day`` — once per day if they span multiple local days.
     """
     cal = Calendar.from_ical(ics_bytes)
     query = of(cal, skip_bad_series=True)
@@ -162,49 +158,46 @@ def events_by_day_from_ics(
             continue
         raw_start = dt_prop.dt
 
+        # All-day (DATE ``DTSTART``): one code path; duration may be one day or many.
+        if _dtstart_is_all_day(comp):
+            clip_start = max(start_d, min(visible_dates))
+            clip_end = min(end_d, max(visible_dates))
+            if clip_start > clip_end:
+                continue
+            uid_str = str(comp.get("uid") or "")
+            key = (
+                (uid_str, clip_start.isoformat(), clip_end.isoformat())
+                if uid_str
+                else (title, clip_start.isoformat(), clip_end.isoformat())
+            )
+            if key in seen_multiday:
+                continue
+            seen_multiday.add(key)
+            multiday.append(
+                MultidaySpanDict(
+                    title=title,
+                    time=None,
+                    start=clip_start.isoformat(),
+                    end=clip_end.isoformat(),
+                )
+            )
+            continue
+
+        # Timed: one local calendar day.
         if start_d == end_d:
-            _, time_label = _local_date_and_time_label(raw_start, tz)
             if start_d not in visible_dates:
                 continue
-            row: IcsEventRow = {"title": title, "time": time_label}
-            by_day[start_d].append(row)
-            continue
-
-        # Multiple local calendar days.
-        if not _dtstart_is_all_day(comp):
             _, time_label = _local_date_and_time_label(raw_start, tz)
-            d = start_d
-            while d <= end_d:
-                if d in visible_dates:
-                    by_day[d].append({"title": title, "time": time_label})
-                d += timedelta(days=1)
+            by_day[start_d].append({"title": title, "time": time_label})
             continue
 
-        # All-day multi-day: clip to grid; one span record (renderer clips per week).
-        clip_start = max(start_d, min(visible_dates))
-        clip_end = min(end_d, max(visible_dates))
-        if clip_start > clip_end:
-            continue
-
-        time_label = None
-
-        uid_str = str(comp.get("uid") or "")
-        key = (
-            (uid_str, clip_start.isoformat(), clip_end.isoformat())
-            if uid_str
-            else (title, clip_start.isoformat(), clip_end.isoformat())
-        )
-        if key in seen_multiday:
-            continue
-        seen_multiday.add(key)
-        multiday.append(
-            MultidaySpanDict(
-                title=title,
-                time=time_label,
-                start=clip_start.isoformat(),
-                end=clip_end.isoformat(),
-            )
-        )
+        # Timed: multiple local calendar days — one list row per day.
+        _, time_label = _local_date_and_time_label(raw_start, tz)
+        d = start_d
+        while d <= end_d:
+            if d in visible_dates:
+                by_day[d].append({"title": title, "time": time_label})
+            d += timedelta(days=1)
 
     out: dict[date, list[IcsEventRow]] = {}
     for d, rows in by_day.items():

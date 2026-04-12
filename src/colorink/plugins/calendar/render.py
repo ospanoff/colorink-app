@@ -40,7 +40,7 @@ _OVERFLOW_CHIP_BG_PAST = (236, 236, 240)
 _OVERFLOW_CHIP_OUTLINE = (168, 182, 202)
 _OVERFLOW_CHIP_OUTLINE_PAST = (205, 208, 214)
 _OVERFLOW_CHIP_RADIUS = 4
-# Stacked multiday bars (lanes) cycle these three fills / outlines / label colors.
+# Stacked multiday bars: three cool pastels (blue-gray, soft green, mauve) by lane.
 _MULTIDAY_BAR_FILLS = (
     (218, 228, 242),
     (224, 236, 228),
@@ -60,16 +60,6 @@ _MULTIDAY_BAR_OUTLINES_PAST = (
     (200, 203, 208),
     (198, 208, 200),
     (208, 200, 210),
-)
-_MULTIDAY_BAR_TEXTS = (
-    (22, 55, 95),
-    (28, 72, 48),
-    (72, 42, 82),
-)
-_MULTIDAY_BAR_TEXTS_PAST = (
-    (125, 128, 132),
-    (125, 130, 128),
-    (128, 125, 130),
 )
 # Nudge multiday fill down vs. glyphs; height stays ``bar_h`` (same as ``event_line_step``).
 _MULTIDAY_BG_TOP_INSET = 2
@@ -200,20 +190,12 @@ def _clip_span_to_week(
 
 def _multiday_bar_palette(
     lane: int, is_past: bool
-) -> tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]]:
-    """Fill, outline, and label RGB for a multiday lane (cycles three palettes)."""
+) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """Bar fill and outline for a multiday lane (cycles three cool pastels)."""
     i = lane % len(_MULTIDAY_BAR_FILLS)
     if is_past:
-        return (
-            _MULTIDAY_BAR_FILLS_PAST[i],
-            _MULTIDAY_BAR_OUTLINES_PAST[i],
-            _MULTIDAY_BAR_TEXTS_PAST[i],
-        )
-    return (
-        _MULTIDAY_BAR_FILLS[i],
-        _MULTIDAY_BAR_OUTLINES[i],
-        _MULTIDAY_BAR_TEXTS[i],
-    )
+        return _MULTIDAY_BAR_FILLS_PAST[i], _MULTIDAY_BAR_OUTLINES_PAST[i]
+    return _MULTIDAY_BAR_FILLS[i], _MULTIDAY_BAR_OUTLINES[i]
 
 
 def _assign_multiday_lanes(
@@ -314,35 +296,32 @@ def _draw_multiday_bar_label(
     max_inner: int,
     span: dict[str, Any],
     fonts: MonthFonts,
-    text_rgb: tuple[int, int, int],
     baseline_y: int,
+    muted: bool,
 ) -> None:
-    """Draw truncated time+title or title-only inside a multiday strip (``anchor=ls``)."""
-    title_s = str(span.get("title") or "")
-    time_s = span.get("time")
-    if time_s:
-        t_draw, title_draw = _truncate_time_and_title(
+    """Draw multiday text using the same colors and layout as list-event rows."""
+    time_part, title_part = _event_time_and_title(span)
+    if time_part:
+        _draw_timed_event_line(
             draw,
-            str(time_s),
-            title_s,
-            fonts.event_regular,
-            fonts.event_bold,
-            max_inner,
+            left_x=inner_left,
+            baseline_y=baseline_y,
+            max_width=max_inner,
+            time_text=time_part,
+            title_text=title_part,
+            fonts=fonts,
+            muted=muted,
         )
-        x = float(inner_left)
-        x = _draw_ls_advance(draw, x, baseline_y, t_draw, fonts.event_regular, text_rgb)
-        if title_draw:
-            x = _draw_ls_advance(draw, x, baseline_y, " ", fonts.event_regular, text_rgb)
-            draw.text(
-                (x, baseline_y),
-                title_draw,
-                fill=text_rgb,
-                font=fonts.event_bold,
-                anchor="ls",
-            )
-        return
-    line = truncate_to_width(draw, title_s, fonts.event_bold, max_inner)
-    draw.text((inner_left, baseline_y), line, fill=text_rgb, font=fonts.event_bold, anchor="ls")
+    else:
+        _draw_title_only_event_line(
+            draw,
+            left_x=inner_left,
+            baseline_y=baseline_y,
+            max_width=max_inner,
+            title=title_part,
+            fonts=fonts,
+            muted=muted,
+        )
 
 
 def truncate_to_width(
@@ -511,23 +490,23 @@ def _draw_title_only_event_line(
 
 
 def _overflow_chip_label(hidden_count: int) -> str:
-    """Human-readable count of events that did not fit in the cell."""
+    """Chip text for events that did not fit: ``+1 event`` / ``+N events``."""
     if hidden_count == 1:
-        return "1 more event"
-    return f"{hidden_count} more events"
+        return "+1 event"
+    return f"+{hidden_count} events"
 
 
 def _draw_overflow_chip(
     draw: ImageDraw.ImageDraw,
     *,
-    left_x: int,
+    center_x: float,
     line_top: float,
     max_width: int,
     hidden_count: int,
     fonts: MonthFonts,
     muted: bool = False,
 ) -> None:
-    """Pill-shaped label when list events exceed the visible rows (e.g. ``3 more events``)."""
+    """Pill-shaped overflow label when the list is truncated; centered in the cell."""
     font = fonts.event_bold
     pad_h = max(3, fonts.event_px // 5)
     pad_v = max(1, fonts.event_px // 8)
@@ -543,8 +522,9 @@ def _draw_overflow_chip(
     ch = int(min(float(text_h + 2 * pad_v), max(8.0, line_h - 1.0)))
     cw = int(min(tw + 2.0 * pad_h, float(max(1, max_width))))
     y0 = line_top + max(0.0, (line_h - float(ch)) / 2.0)
-    x0 = float(left_x)
-    x1 = x0 + float(cw)
+    half = float(cw) / 2.0
+    x0 = center_x - half
+    x1 = center_x + half
     y1 = y0 + float(ch)
     fill_bg = _OVERFLOW_CHIP_BG_PAST if muted else _OVERFLOW_CHIP_BG
     outline = _OVERFLOW_CHIP_OUTLINE_PAST if muted else _OVERFLOW_CHIP_OUTLINE
@@ -582,7 +562,7 @@ def _draw_events_in_cell(
     line_top = _cell_content_top_y(cell_top, fonts) + int(reserved_top)
     max_w = int(column_width - 2 * _CELL_INNER_PAD)
     slots = _event_row_slots_in_cell(row_height, fonts, reserved_top)
-    # Overflow chip uses one row; leave that slot empty for events when trimming.
+    # Overflow chip uses one row; leave that slot empty when trimming the list.
     overflow = len(items) > slots
     event_limit = len(items) if not overflow else max(0, slots - 1)
 
@@ -591,7 +571,7 @@ def _draw_events_in_cell(
             if overflow:
                 _draw_overflow_chip(
                     draw,
-                    left_x=text_left,
+                    center_x=float(text_left) + float(max_w) / 2.0,
                     line_top=float(line_top),
                     max_width=max_w,
                     hidden_count=len(items) - event_limit,
@@ -668,7 +648,7 @@ def _draw_multiday_bars_for_week(
         x1 = pad + (i1 + 1) * col_w - 2.0
         span_end: date = m["end"]
         is_past_span = span_end < today
-        fill, outline, tw = _multiday_bar_palette(lane, is_past_span)
+        fill, outline = _multiday_bar_palette(lane, is_past_span)
         _draw_multiday_rounded_fill(
             draw, x0=x0, x1=x1, y0=y0, bar_h=bar_h, fill=fill, outline=outline
         )
@@ -683,8 +663,8 @@ def _draw_multiday_bars_for_week(
             max_inner=max_inner,
             span=m,
             fonts=fonts,
-            text_rgb=tw,
             baseline_y=bl,
+            muted=is_past_span,
         )
 
     # Rows needed = max(lane)+1 among spans covering the column (not span count: lanes can skip).
