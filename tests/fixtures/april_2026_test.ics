@@ -299,4 +299,20 @@ DTSTART;VALUE=DATE:20260413
 DTEND;VALUE=DATE:20260416
 SUMMARY:Apr 13–15 (3-day all-day)
 END:VEVENT
+BEGIN:VEVENT
+UID:colorink-test-20260413-2day-allday@fixture
+DTSTAMP:20260408T120000Z
+DTSTART;VALUE=DATE:20260413
+DTEND;VALUE=DATE:20260415
+SUMMARY:Apr 13–14 (2-day all-day)
+END:VEVENT
+BEGIN:VEVENT
+UID:colorink-test-20260419-4day-longtitle@fixture
+DTSTAMP:20260408T120000Z
+DTSTART;VALUE=DATE:20260419
+DTEND;VALUE=DATE:20260423
+SUMMARY:Very long April 19–22 four-day all-day fixture title — multiday spanning bar 
+ label truncation ellipsis calendar plugin layout regression testing placeholder text 
+ padding keywords workshop travel conference block reserved follow-up review sync
+END:VEVENT
 END:VCALENDAR

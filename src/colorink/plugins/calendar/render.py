@@ -35,6 +35,14 @@ _ERROR_TEXT = (160, 0, 0)
 _EVENT_TIME_PAST = (150, 150, 152)
 _EVENT_TITLE_PAST = (128, 128, 130)
 _OVERFLOW_PAST = (105, 105, 125)
+_MULTIDAY_BAR_BG = (218, 228, 242)
+_MULTIDAY_BAR_BG_PAST = (230, 232, 236)
+_MULTIDAY_BAR_TEXT = (22, 55, 95)
+_MULTIDAY_BAR_TEXT_PAST = (125, 128, 132)
+_MULTIDAY_BAR_OUTLINE = (168, 182, 202)
+# Nudge multiday fill down vs. glyphs; height stays ``bar_h`` (same as ``event_line_step``).
+_MULTIDAY_BG_TOP_INSET = 2
+_MULTIDAY_BAR_CORNER_RADIUS = 3
 # Current day: cell tint + frame (events use normal palette; past days stay un-tinted).
 _TODAY_CELL_BG = (232, 242, 255)
 _TODAY_OUTLINE = (50, 90, 145)
@@ -43,8 +51,16 @@ _TODAY_DAY_NUMBER = (18, 52, 110)
 _WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 # Padding inside each day cell (day number, event text); must match header alignment math.
 _CELL_INNER_PAD = 4
+# Day-of-month digit: must match ``_draw_day_cell_chrome`` y offset.
+_DAY_NUMBER_TOP_PAD = 3
+# Space between bottom of day number and first multiday bar / event line.
+_GAP_BELOW_DAY_NUMBER = 4
+# List row height = event_px * this factor; multiday stripes use the same step (see
+# ``_multiday_lane_height_px``). Slightly > 1.0 gives air between lines and room inside bars.
+_EVENT_LINE_STEP_FACTOR = 1.26
 # Monday-first week: column indices for Sat/Sun background tint.
 _WEEKEND_COLUMNS = frozenset((5, 6))
+_GRID_COLUMNS = 7
 
 
 def _calendar_font_regular(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -92,7 +108,7 @@ class MonthFonts:
             dow_px=dow_px,
             daynum_px=daynum_px,
             event_px=event_px,
-            event_line_step=int(event_px * 1.18),
+            event_line_step=int(event_px * _EVENT_LINE_STEP_FACTOR),
             header=_calendar_font_bold(header_px),
             dow=_calendar_font_regular(dow_px),
             day_number=_calendar_font_regular(daynum_px),
@@ -111,6 +127,65 @@ def _events_by_day_from_payload(raw_map: Any) -> dict[date, list[Any]]:
         except ValueError:
             continue
     return out
+
+
+def _multiday_spans_from_payload(raw: Any) -> list[dict[str, Any]]:
+    """Parse ``multiday_spans`` from plugin JSON into dicts with ``date`` objects."""
+    out: list[dict[str, Any]] = []
+    if not raw:
+        return out
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            s = date.fromisoformat(str(item["start"]))
+            e = date.fromisoformat(str(item["end"]))
+        except (KeyError, ValueError, TypeError):
+            continue
+        title = str(item.get("title") or "")
+        t = item.get("time")
+        time_s = str(t) if t else None
+        out.append({"title": title, "time": time_s, "start": s, "end": e})
+    return out
+
+
+def _intervals_overlap_col(a0: int, a1: int, b0: int, b1: int) -> bool:
+    """Inclusive column indices within a week row."""
+    return a0 <= b1 and b0 <= a1
+
+
+def _clip_span_to_week(
+    span_start: date,
+    span_end: date,
+    week: tuple[date, ...],
+) -> tuple[int, int] | None:
+    w0, w6 = week[0], week[6]
+    if span_end < w0 or span_start > w6:
+        return None
+    i0 = next(i for i, d in enumerate(week) if d >= span_start)
+    i1 = next(i for i in range(6, -1, -1) if week[i] <= span_end)
+    return i0, i1
+
+
+def _assign_multiday_lanes(
+    segments: list[tuple[int, int, dict[str, Any]]],
+) -> tuple[list[tuple[int, int, dict[str, Any], int]], int]:
+    """Greedy lane packing for overlapping week segments. Returns (annotated, lane_count)."""
+    ordered = sorted(segments, key=lambda s: (s[0], -(s[1] - s[0])))
+    lanes: list[list[tuple[int, int]]] = []
+    out: list[tuple[int, int, dict[str, Any], int]] = []
+    for i0, i1, m in ordered:
+        placed: int | None = None
+        for li, occ in enumerate(lanes):
+            if not any(_intervals_overlap_col(i0, i1, a, b) for a, b in occ):
+                occ.append((i0, i1))
+                placed = li
+                break
+        if placed is None:
+            lanes.append([(i0, i1)])
+            placed = len(lanes) - 1
+        out.append((i0, i1, m, placed))
+    return out, len(lanes)
 
 
 def _event_time_and_title(item: Any) -> tuple[str | None, str]:
@@ -146,16 +221,79 @@ def _truncate_time_and_title(
     return time_str, truncate_to_width(draw, title_str, font_title, int(budget))
 
 
-def _baseline_y_from_line_top(
-    line_top: int,
-    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
-) -> int:
-    """Convert a line's top ``y`` to a shared baseline for ``anchor='ls'`` text."""
+def _event_row_baseline(y_slot_top: float, fonts: MonthFonts) -> int:
+    """``anchor=ls`` baseline: slot top + ``event_regular`` ascent (list + multiday rows)."""
+    line_top = int(y_slot_top)
+    font = fonts.event_regular
     if isinstance(font, ImageFont.FreeTypeFont):
         ascent, _ = font.getmetrics()
     else:
         ascent = max(8, int(getattr(font, "size", 12) * 0.75))
     return line_top + ascent
+
+
+def _multiday_strip_y_bounds(y0: float, bar_h: int) -> tuple[float, float]:
+    """Top/bottom y for the rounded fill; full height ``bar_h`` (see ``_MULTIDAY_BG_TOP_INSET``)."""
+    y_top = y0 + _MULTIDAY_BG_TOP_INSET
+    return y_top, y_top + bar_h
+
+
+def _draw_multiday_rounded_fill(
+    draw: ImageDraw.ImageDraw,
+    *,
+    x0: float,
+    x1: float,
+    y0: float,
+    bar_h: int,
+    fill: tuple[int, int, int],
+    outline: tuple[int, int, int],
+) -> None:
+    y_top, y_bot = _multiday_strip_y_bounds(y0, bar_h)
+    draw.rounded_rectangle(
+        [x0, y_top, x1, y_bot],
+        radius=_MULTIDAY_BAR_CORNER_RADIUS,
+        fill=fill,
+        outline=outline,
+        width=1,
+    )
+
+
+def _draw_multiday_bar_label(
+    draw: ImageDraw.ImageDraw,
+    *,
+    inner_left: int,
+    max_inner: int,
+    span: dict[str, Any],
+    fonts: MonthFonts,
+    text_rgb: tuple[int, int, int],
+    baseline_y: int,
+) -> None:
+    """Draw truncated time+title or title-only inside a multiday strip (``anchor=ls``)."""
+    title_s = str(span.get("title") or "")
+    time_s = span.get("time")
+    if time_s:
+        t_draw, title_draw = _truncate_time_and_title(
+            draw,
+            str(time_s),
+            title_s,
+            fonts.event_regular,
+            fonts.event_bold,
+            max_inner,
+        )
+        x = float(inner_left)
+        x = _draw_ls_advance(draw, x, baseline_y, t_draw, fonts.event_regular, text_rgb)
+        if title_draw:
+            x = _draw_ls_advance(draw, x, baseline_y, " ", fonts.event_regular, text_rgb)
+            draw.text(
+                (x, baseline_y),
+                title_draw,
+                fill=text_rgb,
+                font=fonts.event_bold,
+                anchor="ls",
+            )
+        return
+    line = truncate_to_width(draw, title_s, fonts.event_bold, max_inner)
+    draw.text((inner_left, baseline_y), line, fill=text_rgb, font=fonts.event_bold, anchor="ls")
 
 
 def truncate_to_width(
@@ -235,8 +373,34 @@ def _draw_ics_error_banner(
     draw.text((fonts.pad, grid_top + 8), wrapped, fill=_ERROR_TEXT, font=msg_font)
 
 
-def _max_visible_event_rows(row_height: float, daynum_px: int, event_px: int) -> int:
-    return max(1, int((row_height - daynum_px * 1.4) // max(11.0, event_px * 1.2)))
+def _day_number_row_height_px(fonts: MonthFonts) -> int:
+    """Height from cell top through the bottom of the day-of-month glyph."""
+    if isinstance(fonts.day_number, ImageFont.FreeTypeFont):
+        ascent, descent = fonts.day_number.getmetrics()
+        return _DAY_NUMBER_TOP_PAD + ascent + descent
+    return _DAY_NUMBER_TOP_PAD + int(fonts.daynum_px * 1.28)
+
+
+def _cell_content_top_y(cell_top: float, fonts: MonthFonts) -> int:
+    """First y coordinate below the day number (multiday bars and event lines start here)."""
+    return int(
+        cell_top + _day_number_row_height_px(fonts) + _GAP_BELOW_DAY_NUMBER,
+    )
+
+
+def _multiday_lane_height_px(fonts: MonthFonts) -> int:
+    """One multiday stripe uses exactly the same vertical quantum as a list event row."""
+    return fonts.event_line_step
+
+
+def _max_visible_event_rows(
+    row_height: float,
+    fonts: MonthFonts,
+    reserved_top: float = 0,
+) -> int:
+    header = _day_number_row_height_px(fonts) + _GAP_BELOW_DAY_NUMBER
+    step = float(fonts.event_line_step)
+    return max(1, int((row_height - header - reserved_top) // max(11.0, step)))
 
 
 def _draw_ls_advance(
@@ -327,16 +491,17 @@ def _draw_events_in_cell(
     items: list[Any],
     fonts: MonthFonts,
     muted: bool = False,
+    reserved_top: float = 0,
 ) -> None:
     """Draw stacked event lines inside one day cell."""
     text_left = int(cell_left + _CELL_INNER_PAD)
-    line_top = int(cell_top + int(fonts.daynum_px * 1.15))
+    line_top = _cell_content_top_y(cell_top, fonts) + int(reserved_top)
     max_w = int(column_width - 2 * _CELL_INNER_PAD)
-    max_rows = _max_visible_event_rows(row_height, fonts.daynum_px, fonts.event_px)
+    max_rows = _max_visible_event_rows(row_height, fonts, reserved_top)
 
     shown = 0
     for item in items:
-        baseline_y = _baseline_y_from_line_top(line_top, fonts.event_regular)
+        baseline_y = _event_row_baseline(float(line_top), fonts)
 
         if shown >= max_rows:
             _draw_overflow_footer(
@@ -377,7 +542,79 @@ def _draw_events_in_cell(
         shown += 1
 
 
-def _draw_day_cell(
+def _reserved_px_for_column_bar_count(k: int, bar_h: int, bar_gap: int) -> float:
+    """Vertical space for ``k`` stacked multiday bars (``k == 0`` → none)."""
+    if k <= 0:
+        return 0.0
+    return float(k * bar_h + (k - 1) * bar_gap)
+
+
+def _draw_multiday_bars_for_week(
+    draw: ImageDraw.ImageDraw,
+    *,
+    week: tuple[date, ...],
+    cell_top: float,
+    pad: float,
+    col_w: float,
+    fonts: MonthFonts,
+    spans: list[dict[str, Any]],
+    today: date,
+    bar_h: int,
+    bar_gap: int,
+) -> list[float]:
+    """Draw week-spanning bars; returns per-column px to reserve above list events (length 7).
+
+    Reserve matches how many multiday lanes touch that day (no blank “phantom” lanes).
+    Columns with no multiday keep 0. Lane order is stable so the same span shares one row.
+    """
+    segments: list[tuple[int, int, dict[str, Any]]] = []
+    for m in spans:
+        clipped = _clip_span_to_week(m["start"], m["end"], week)
+        if clipped:
+            i0, i1 = clipped
+            segments.append((i0, i1, m))
+    if not segments:
+        return [0.0] * _GRID_COLUMNS
+    annotated, _n_lanes = _assign_multiday_lanes(segments)
+    base_y = float(_cell_content_top_y(cell_top, fonts))
+    for i0, i1, m, lane in annotated:
+        y0 = float(base_y + lane * (bar_h + bar_gap))
+        x0 = pad + i0 * col_w + 2.0
+        x1 = pad + (i1 + 1) * col_w - 2.0
+        span_end: date = m["end"]
+        is_past_span = span_end < today
+        fill = _MULTIDAY_BAR_BG_PAST if is_past_span else _MULTIDAY_BAR_BG
+        outline = _GRID_LINE if is_past_span else _MULTIDAY_BAR_OUTLINE
+        _draw_multiday_rounded_fill(
+            draw, x0=x0, x1=x1, y0=y0, bar_h=bar_h, fill=fill, outline=outline
+        )
+        tw = _MULTIDAY_BAR_TEXT_PAST if is_past_span else _MULTIDAY_BAR_TEXT
+        max_inner = int(x1 - x0 - 2 * _CELL_INNER_PAD)
+        if max_inner <= 0:
+            continue
+        inner_left = int(x0 + _CELL_INNER_PAD)
+        bl = _event_row_baseline(y0, fonts)
+        _draw_multiday_bar_label(
+            draw,
+            inner_left=inner_left,
+            max_inner=max_inner,
+            span=m,
+            fonts=fonts,
+            text_rgb=tw,
+            baseline_y=bl,
+        )
+
+    bars_per_col = [0] * _GRID_COLUMNS
+    for i0, i1, _m, _lane in annotated:
+        for ci in range(i0, i1 + 1):
+            bars_per_col[ci] += 1
+    return [
+        _reserved_px_for_column_bar_count(bars_per_col[i], bar_h, bar_gap)
+        for i in range(_GRID_COLUMNS)
+    ]
+
+
+def _draw_day_cell_chrome(
     draw: ImageDraw.ImageDraw,
     *,
     cell_left: float,
@@ -387,12 +624,10 @@ def _draw_day_cell(
     day_index: int,
     d: date,
     focused_month: int,
-    col_w: float,
-    events_by_day: dict[date, list[Any]],
     fonts: MonthFonts,
     today: date,
 ) -> None:
-    """Background, grid outline, day number, and optional event stack for one grid cell."""
+    """Background, grid outline, and day-of-month number (no events)."""
     is_weekend = day_index in _WEEKEND_COLUMNS
     is_today = d == today
     if is_today:
@@ -423,15 +658,30 @@ def _draw_day_cell(
         day_color = _TODAY_DAY_NUMBER
     else:
         day_color = _DAY_IN_MONTH if d.month == focused_month else _DAY_OTHER_MONTH
-    is_past = d < today
 
     draw.text(
-        (cell_left + _CELL_INNER_PAD, cell_top + 3),
+        (cell_left + _CELL_INNER_PAD, cell_top + _DAY_NUMBER_TOP_PAD),
         str(d.day),
         fill=day_color,
         font=fonts.day_number,
     )
 
+
+def _draw_day_cell_events(
+    draw: ImageDraw.ImageDraw,
+    *,
+    cell_left: float,
+    cell_top: float,
+    col_w: float,
+    row_h: float,
+    d: date,
+    events_by_day: dict[date, list[Any]],
+    fonts: MonthFonts,
+    today: date,
+    reserved_top: float,
+) -> None:
+    """Single-day event lines inside one cell (below multiday bars when ``reserved_top`` > 0)."""
+    is_past = d < today
     day_items = events_by_day.get(d, [])
     if not day_items:
         return
@@ -445,6 +695,7 @@ def _draw_day_cell(
         items=day_items,
         fonts=fonts,
         muted=is_past,
+        reserved_top=reserved_top,
     )
 
 
@@ -460,6 +711,7 @@ def render_month_png(
     ok = bool(data.get("ok"))
     err = str(data.get("error", ""))
     events_by_day = _events_by_day_from_payload(data.get("events_by_day"))
+    multiday_spans = _multiday_spans_from_payload(data.get("multiday_spans"))
     raw_today = data.get("today")
     if raw_today:
         try:
@@ -487,12 +739,16 @@ def render_month_png(
         _draw_ics_error_banner(draw, width=width, grid_top=grid_top, message=err, fonts=fonts)
         return _png_bytes(img)
 
+    bar_h = _multiday_lane_height_px(fonts)
+    bar_gap = 0
+
     for week_index, week in enumerate(weeks):
         cell_top = grid_top + week_index * row_h
+        week_t = tuple(week)
         for day_index, d in enumerate(week):
             cell_left = fonts.pad + day_index * col_w
             cell_right = fonts.pad + (day_index + 1) * col_w
-            _draw_day_cell(
+            _draw_day_cell_chrome(
                 draw,
                 cell_left=cell_left,
                 cell_top=cell_top,
@@ -501,10 +757,36 @@ def render_month_png(
                 day_index=day_index,
                 d=d,
                 focused_month=month,
+                fonts=fonts,
+                today=today,
+            )
+
+        reserved_per_column = _draw_multiday_bars_for_week(
+            draw,
+            week=week_t,
+            cell_top=cell_top,
+            pad=float(fonts.pad),
+            col_w=col_w,
+            fonts=fonts,
+            spans=multiday_spans,
+            today=today,
+            bar_h=bar_h,
+            bar_gap=bar_gap,
+        )
+
+        for day_index, d in enumerate(week):
+            cell_left = fonts.pad + day_index * col_w
+            _draw_day_cell_events(
+                draw,
+                cell_left=cell_left,
+                cell_top=cell_top,
                 col_w=col_w,
+                row_h=row_h,
+                d=d,
                 events_by_day=events_by_day,
                 fonts=fonts,
                 today=today,
+                reserved_top=reserved_per_column[day_index],
             )
 
     return _png_bytes(img)

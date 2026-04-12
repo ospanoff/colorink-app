@@ -52,6 +52,7 @@ class CalendarPlugin(ImagePlugin):
                 "year": year,
                 "month": month,
                 "events_by_day": {},
+                "multiday_spans": [],
                 "url_label": "",
                 "timezone": str(tz),
                 "today": today_iso,
@@ -62,13 +63,14 @@ class CalendarPlugin(ImagePlugin):
                 response = client.get(url, follow_redirects=True)
                 response.raise_for_status()
                 ics_bytes = response.content
-            events = events_by_day_from_ics(ics_bytes, year, month, tz)
+            by_day, multiday_spans = events_by_day_from_ics(ics_bytes, year, month, tz)
             return {
                 "ok": True,
                 "error": "",
                 "year": year,
                 "month": month,
-                "events_by_day": {k.isoformat(): v for k, v in events.items()},
+                "events_by_day": {k.isoformat(): v for k, v in by_day.items()},
+                "multiday_spans": multiday_spans,
                 "url_label": host_for_label(url),
                 "timezone": str(tz),
                 "today": today_iso,
@@ -80,6 +82,7 @@ class CalendarPlugin(ImagePlugin):
                 "year": year,
                 "month": month,
                 "events_by_day": {},
+                "multiday_spans": [],
                 "url_label": host_for_label(url),
                 "timezone": str(tz),
                 "today": today_iso,
