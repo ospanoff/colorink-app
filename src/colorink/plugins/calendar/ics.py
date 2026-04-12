@@ -110,6 +110,14 @@ def _sort_key(row: IcsEventRow) -> tuple[int | str, ...]:
     return (1, row["time"], row["title"].lower())
 
 
+def _dtstart_is_all_day(comp) -> bool:
+    """True when ``DTSTART`` is a calendar date (``VALUE=DATE``), not a date-time."""
+    dt_prop = comp.get("dtstart")
+    if dt_prop is None:
+        return False
+    return not isinstance(dt_prop.dt, datetime)
+
+
 def events_by_day_from_ics(
     ics_bytes: bytes,
     year: int,
@@ -118,9 +126,14 @@ def events_by_day_from_ics(
 ) -> tuple[dict[date, list[IcsEventRow]], list[MultidaySpanDict]]:
     """Map local dates to events for the **visible month grid** (Mon–Sun weeks).
 
-    Single-calendar-day instances go into ``events_by_day``. Multi-day instances are listed
-    in ``multiday_spans`` (one entry per instance) and are drawn as week-spanning bars in
-    the renderer — they are not duplicated into ``events_by_day``.
+    Single-calendar-day instances go into ``events_by_day``. **All-day** multi-day
+    instances (``DTSTART`` is a ``DATE``) are listed in ``multiday_spans`` (one entry per
+    instance) and drawn as week-spanning bars — they are not duplicated into
+    ``events_by_day``.
+
+    Timed events that span more than one **local** calendar day are listed in
+    ``events_by_day`` once per affected day (same time label from ``DTSTART``); they never
+    appear in ``multiday_spans``.
     """
     cal = Calendar.from_ical(ics_bytes)
     query = of(cal, skip_bad_series=True)
@@ -144,32 +157,36 @@ def events_by_day_from_ics(
         if start_d > end_d:
             continue
 
+        dt_prop = comp.get("dtstart")
+        if dt_prop is None:
+            continue
+        raw_start = dt_prop.dt
+
         if start_d == end_d:
-            dt_prop = comp.get("dtstart")
-            if dt_prop is None:
-                continue
-            v = dt_prop.dt
-            _, time_label = _local_date_and_time_label(v, tz)
+            _, time_label = _local_date_and_time_label(raw_start, tz)
             if start_d not in visible_dates:
                 continue
             row: IcsEventRow = {"title": title, "time": time_label}
             by_day[start_d].append(row)
             continue
 
-        # Multi-day: clip to visible grid and emit one span record (renderer clips per week).
+        # Multiple local calendar days.
+        if not _dtstart_is_all_day(comp):
+            _, time_label = _local_date_and_time_label(raw_start, tz)
+            d = start_d
+            while d <= end_d:
+                if d in visible_dates:
+                    by_day[d].append({"title": title, "time": time_label})
+                d += timedelta(days=1)
+            continue
+
+        # All-day multi-day: clip to grid; one span record (renderer clips per week).
         clip_start = max(start_d, min(visible_dates))
         clip_end = min(end_d, max(visible_dates))
         if clip_start > clip_end:
             continue
 
-        dt_prop = comp.get("dtstart")
-        if dt_prop is None:
-            continue
-        raw_start = dt_prop.dt
-        if isinstance(raw_start, datetime):
-            _, time_label = _local_date_and_time_label(raw_start, tz)
-        else:
-            time_label = None
+        time_label = None
 
         uid_str = str(comp.get("uid") or "")
         key = (

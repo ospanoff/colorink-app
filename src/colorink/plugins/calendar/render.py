@@ -29,12 +29,17 @@ _WEEKDAY_CELL_BG = (255, 255, 255)
 _WEEKEND_CELL_BG = (244, 244, 246)
 _EVENT_TIME = (105, 105, 105)
 _EVENT_TITLE = (28, 28, 28)
-_OVERFLOW_MORE = (60, 60, 120)
+_OVERFLOW_MORE = (45, 55, 95)
 _ERROR_TEXT = (160, 0, 0)
 # Days before today: muted event text only (cell chrome unchanged).
 _EVENT_TIME_PAST = (150, 150, 152)
 _EVENT_TITLE_PAST = (128, 128, 130)
 _OVERFLOW_PAST = (105, 105, 125)
+_OVERFLOW_CHIP_BG = (228, 234, 244)
+_OVERFLOW_CHIP_BG_PAST = (236, 236, 240)
+_OVERFLOW_CHIP_OUTLINE = (168, 182, 202)
+_OVERFLOW_CHIP_OUTLINE_PAST = (205, 208, 214)
+_OVERFLOW_CHIP_RADIUS = 4
 _MULTIDAY_BAR_BG = (218, 228, 242)
 _MULTIDAY_BAR_BG_PAST = (230, 232, 236)
 _MULTIDAY_BAR_TEXT = (22, 55, 95)
@@ -393,11 +398,12 @@ def _multiday_lane_height_px(fonts: MonthFonts) -> int:
     return fonts.event_line_step
 
 
-def _max_visible_event_rows(
+def _event_row_slots_in_cell(
     row_height: float,
     fonts: MonthFonts,
     reserved_top: float = 0,
 ) -> int:
+    """Row slots below the day number (and multiday reserve); each is ``event_line_step`` tall."""
     header = _day_number_row_height_px(fonts) + _GAP_BELOW_DAY_NUMBER
     step = float(fonts.event_line_step)
     return max(1, int((row_height - header - reserved_top) // max(11.0, step)))
@@ -460,24 +466,58 @@ def _draw_title_only_event_line(
     draw.text((left_x, baseline_y), line, fill=fill_title, font=fonts.event_bold, anchor="ls")
 
 
-def _draw_overflow_footer(
+def _overflow_chip_label(hidden_count: int) -> str:
+    """Human-readable count of events that did not fit in the cell."""
+    if hidden_count == 1:
+        return "1 more event"
+    return f"{hidden_count} more events"
+
+
+def _draw_overflow_chip(
     draw: ImageDraw.ImageDraw,
     *,
     left_x: int,
-    baseline_y: int,
+    line_top: float,
     max_width: int,
     hidden_count: int,
     fonts: MonthFonts,
     muted: bool = False,
 ) -> None:
-    fill_ov = _OVERFLOW_PAST if muted else _OVERFLOW_MORE
-    more = f"+{hidden_count} more"
+    """Pill-shaped label when list events exceed the visible rows (e.g. ``3 more events``)."""
+    font = fonts.event_bold
+    pad_h = max(3, fonts.event_px // 5)
+    pad_v = max(1, fonts.event_px // 8)
+    inner_text_max = max(1, max_width - 2 * pad_h)
+    label = truncate_to_width(draw, _overflow_chip_label(hidden_count), font, inner_text_max)
+    tw = float(draw.textlength(label, font=font))
+    line_h = float(fonts.event_line_step)
+    if isinstance(font, ImageFont.FreeTypeFont):
+        ascent, descent = font.getmetrics()
+        text_h = ascent + descent
+    else:
+        text_h = max(8, int(getattr(font, "size", 12) * 1.2))
+    ch = int(min(float(text_h + 2 * pad_v), max(8.0, line_h - 1.0)))
+    cw = int(min(tw + 2.0 * pad_h, float(max(1, max_width))))
+    y0 = line_top + max(0.0, (line_h - float(ch)) / 2.0)
+    x0 = float(left_x)
+    x1 = x0 + float(cw)
+    y1 = y0 + float(ch)
+    fill_bg = _OVERFLOW_CHIP_BG_PAST if muted else _OVERFLOW_CHIP_BG
+    outline = _OVERFLOW_CHIP_OUTLINE_PAST if muted else _OVERFLOW_CHIP_OUTLINE
+    text_fill = _OVERFLOW_PAST if muted else _OVERFLOW_MORE
+    draw.rounded_rectangle(
+        [x0, y0, x1, y1],
+        radius=_OVERFLOW_CHIP_RADIUS,
+        fill=fill_bg,
+        outline=outline,
+        width=1,
+    )
     draw.text(
-        (left_x, baseline_y),
-        truncate_to_width(draw, more, fonts.event_bold, max_width),
-        fill=fill_ov,
-        font=fonts.event_bold,
-        anchor="ls",
+        ((x0 + x1) / 2.0, (y0 + y1) / 2.0),
+        truncate_to_width(draw, label, font, max(1, cw - 2)),
+        fill=text_fill,
+        font=font,
+        anchor="mm",
     )
 
 
@@ -497,24 +537,26 @@ def _draw_events_in_cell(
     text_left = int(cell_left + _CELL_INNER_PAD)
     line_top = _cell_content_top_y(cell_top, fonts) + int(reserved_top)
     max_w = int(column_width - 2 * _CELL_INNER_PAD)
-    max_rows = _max_visible_event_rows(row_height, fonts, reserved_top)
+    slots = _event_row_slots_in_cell(row_height, fonts, reserved_top)
+    # Overflow chip uses one row; leave that slot empty for events when trimming.
+    overflow = len(items) > slots
+    event_limit = len(items) if not overflow else max(0, slots - 1)
 
-    shown = 0
-    for item in items:
-        baseline_y = _event_row_baseline(float(line_top), fonts)
-
-        if shown >= max_rows:
-            _draw_overflow_footer(
-                draw,
-                left_x=text_left,
-                baseline_y=baseline_y,
-                max_width=max_w,
-                hidden_count=len(items) - max_rows,
-                fonts=fonts,
-                muted=muted,
-            )
+    for i, item in enumerate(items):
+        if i >= event_limit:
+            if overflow:
+                _draw_overflow_chip(
+                    draw,
+                    left_x=text_left,
+                    line_top=float(line_top),
+                    max_width=max_w,
+                    hidden_count=len(items) - event_limit,
+                    fonts=fonts,
+                    muted=muted,
+                )
             break
 
+        baseline_y = _event_row_baseline(float(line_top), fonts)
         time_part, title_part = _event_time_and_title(item)
         if time_part:
             _draw_timed_event_line(
@@ -539,7 +581,6 @@ def _draw_events_in_cell(
             )
 
         line_top += fonts.event_line_step
-        shown += 1
 
 
 def _reserved_px_for_column_bar_count(k: int, bar_h: int, bar_gap: int) -> float:
