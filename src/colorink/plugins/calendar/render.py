@@ -40,11 +40,37 @@ _OVERFLOW_CHIP_BG_PAST = (236, 236, 240)
 _OVERFLOW_CHIP_OUTLINE = (168, 182, 202)
 _OVERFLOW_CHIP_OUTLINE_PAST = (205, 208, 214)
 _OVERFLOW_CHIP_RADIUS = 4
-_MULTIDAY_BAR_BG = (218, 228, 242)
-_MULTIDAY_BAR_BG_PAST = (230, 232, 236)
-_MULTIDAY_BAR_TEXT = (22, 55, 95)
-_MULTIDAY_BAR_TEXT_PAST = (125, 128, 132)
-_MULTIDAY_BAR_OUTLINE = (168, 182, 202)
+# Stacked multiday bars (lanes) cycle these three fills / outlines / label colors.
+_MULTIDAY_BAR_FILLS = (
+    (218, 228, 242),
+    (224, 236, 228),
+    (236, 228, 240),
+)
+_MULTIDAY_BAR_FILLS_PAST = (
+    (230, 232, 236),
+    (232, 236, 233),
+    (236, 232, 236),
+)
+_MULTIDAY_BAR_OUTLINES = (
+    (168, 182, 202),
+    (158, 184, 168),
+    (190, 172, 196),
+)
+_MULTIDAY_BAR_OUTLINES_PAST = (
+    (200, 203, 208),
+    (198, 208, 200),
+    (208, 200, 210),
+)
+_MULTIDAY_BAR_TEXTS = (
+    (22, 55, 95),
+    (28, 72, 48),
+    (72, 42, 82),
+)
+_MULTIDAY_BAR_TEXTS_PAST = (
+    (125, 128, 132),
+    (125, 130, 128),
+    (128, 125, 130),
+)
 # Nudge multiday fill down vs. glyphs; height stays ``bar_h`` (same as ``event_line_step``).
 _MULTIDAY_BG_TOP_INSET = 2
 _MULTIDAY_BAR_CORNER_RADIUS = 3
@@ -170,6 +196,24 @@ def _clip_span_to_week(
     i0 = next(i for i, d in enumerate(week) if d >= span_start)
     i1 = next(i for i in range(6, -1, -1) if week[i] <= span_end)
     return i0, i1
+
+
+def _multiday_bar_palette(
+    lane: int, is_past: bool
+) -> tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]]:
+    """Fill, outline, and label RGB for a multiday lane (cycles three palettes)."""
+    i = lane % len(_MULTIDAY_BAR_FILLS)
+    if is_past:
+        return (
+            _MULTIDAY_BAR_FILLS_PAST[i],
+            _MULTIDAY_BAR_OUTLINES_PAST[i],
+            _MULTIDAY_BAR_TEXTS_PAST[i],
+        )
+    return (
+        _MULTIDAY_BAR_FILLS[i],
+        _MULTIDAY_BAR_OUTLINES[i],
+        _MULTIDAY_BAR_TEXTS[i],
+    )
 
 
 def _assign_multiday_lanes(
@@ -605,8 +649,8 @@ def _draw_multiday_bars_for_week(
 ) -> list[float]:
     """Draw week-spanning bars; returns per-column px to reserve above list events (length 7).
 
-    Reserve matches how many multiday lanes touch that day (no blank “phantom” lanes).
-    Columns with no multiday keep 0. Lane order is stable so the same span shares one row.
+    Reserve height is ``max_lane + 1`` stacked rows for that column (lane indices can have
+    gaps when a bar ends mid-week), so timed/list lines always start below every multiday strip.
     """
     segments: list[tuple[int, int, dict[str, Any]]] = []
     for m in spans:
@@ -624,12 +668,10 @@ def _draw_multiday_bars_for_week(
         x1 = pad + (i1 + 1) * col_w - 2.0
         span_end: date = m["end"]
         is_past_span = span_end < today
-        fill = _MULTIDAY_BAR_BG_PAST if is_past_span else _MULTIDAY_BAR_BG
-        outline = _GRID_LINE if is_past_span else _MULTIDAY_BAR_OUTLINE
+        fill, outline, tw = _multiday_bar_palette(lane, is_past_span)
         _draw_multiday_rounded_fill(
             draw, x0=x0, x1=x1, y0=y0, bar_h=bar_h, fill=fill, outline=outline
         )
-        tw = _MULTIDAY_BAR_TEXT_PAST if is_past_span else _MULTIDAY_BAR_TEXT
         max_inner = int(x1 - x0 - 2 * _CELL_INNER_PAD)
         if max_inner <= 0:
             continue
@@ -645,10 +687,11 @@ def _draw_multiday_bars_for_week(
             baseline_y=bl,
         )
 
+    # Rows needed = max(lane)+1 among spans covering the column (not span count: lanes can skip).
     bars_per_col = [0] * _GRID_COLUMNS
-    for i0, i1, _m, _lane in annotated:
+    for i0, i1, _m, lane in annotated:
         for ci in range(i0, i1 + 1):
-            bars_per_col[ci] += 1
+            bars_per_col[ci] = max(bars_per_col[ci], lane + 1)
     return [
         _reserved_px_for_column_bar_count(bars_per_col[i], bar_h, bar_gap)
         for i in range(_GRID_COLUMNS)
