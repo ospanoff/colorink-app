@@ -4,252 +4,61 @@ from __future__ import annotations
 
 import calendar
 import io
-from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
-# Bundled Noto Sans (SIL OFL) — same family for regular vs bold; see fonts/OFL.txt
-_FONTS_DIR = Path(__file__).resolve().parent / "fonts"
-_NOTO_REGULAR = _FONTS_DIR / "NotoSans-Regular.ttf"
-_NOTO_BOLD = _FONTS_DIR / "NotoSans-Bold.ttf"
-
-# --- Palette (RGB) ---------------------------------------------------------------------------
-
-_HEADER_TEXT = (45, 45, 45)
-_WEEKDAY_LABEL = (90, 90, 90)
-_DAY_IN_MONTH = (25, 25, 25)
-_DAY_OTHER_MONTH = (200, 200, 200)
-# Soft grid (was ~220). If Floyd–Steinberg hides lines on device, prefer dither_mode NONE.
-_GRID_LINE = (186, 186, 190)
-_WEEKDAY_CELL_BG = (255, 255, 255)
-# Sat/Sun columns (Mon-first week); matches header strip tint.
-_WEEKEND_CELL_BG = (244, 244, 246)
-_EVENT_TIME = (105, 105, 105)
-_EVENT_TITLE = (28, 28, 28)
-_OVERFLOW_MORE = (45, 55, 95)
-_ERROR_TEXT = (160, 0, 0)
-# Days before today: muted event text only (cell chrome unchanged).
-_EVENT_TIME_PAST = (150, 150, 152)
-_EVENT_TITLE_PAST = (128, 128, 130)
-_OVERFLOW_PAST = (105, 105, 125)
-_OVERFLOW_CHIP_BG = (228, 234, 244)
-_OVERFLOW_CHIP_BG_PAST = (236, 236, 240)
-_OVERFLOW_CHIP_OUTLINE = (168, 182, 202)
-_OVERFLOW_CHIP_OUTLINE_PAST = (205, 208, 214)
-_OVERFLOW_CHIP_RADIUS = 4
-# Stacked multiday bars: three cool pastels (blue-gray, soft green, mauve) by lane.
-_MULTIDAY_BAR_FILLS = (
-    (218, 228, 242),
-    (224, 236, 228),
-    (236, 228, 240),
+from colorink.plugins.calendar.fonts import (
+    MonthFonts,
+    _calendar_font_regular,
+    _truncate_time_and_title,
+    _truncate_to_width,
 )
-_MULTIDAY_BAR_FILLS_PAST = (
-    (230, 232, 236),
-    (232, 236, 233),
-    (236, 232, 236),
+from colorink.plugins.calendar.layout import (
+    _assign_multiday_lanes,
+    _cell_content_top_y,
+    _clip_span_to_week,
+    _event_row_slots_in_cell,
+    _event_time_and_title,
+    _events_by_day_from_payload,
+    _multiday_lane_height_px,
+    _multiday_spans_from_payload,
+    _reserved_px_for_column_bar_count,
+    bars_per_column_from_annotated,
 )
-_MULTIDAY_BAR_OUTLINES = (
-    (168, 182, 202),
-    (158, 184, 168),
-    (190, 172, 196),
+from colorink.plugins.calendar.palette import (
+    _CELL_INNER_PAD,
+    _DAY_IN_MONTH,
+    _DAY_NUMBER_TOP_PAD,
+    _DAY_OTHER_MONTH,
+    _ERROR_TEXT,
+    _EVENT_TIME,
+    _EVENT_TIME_PAST,
+    _EVENT_TITLE,
+    _EVENT_TITLE_PAST,
+    _GRID_COLUMNS,
+    _GRID_LINE,
+    _HEADER_TEXT,
+    _MULTIDAY_BAR_CORNER_RADIUS,
+    _MULTIDAY_BG_TOP_INSET,
+    _OVERFLOW_CHIP_BG,
+    _OVERFLOW_CHIP_BG_PAST,
+    _OVERFLOW_CHIP_OUTLINE,
+    _OVERFLOW_CHIP_OUTLINE_PAST,
+    _OVERFLOW_CHIP_RADIUS,
+    _OVERFLOW_MORE,
+    _OVERFLOW_PAST,
+    _TODAY_CELL_BG,
+    _TODAY_DAY_NUMBER,
+    _TODAY_OUTLINE,
+    _WEEKDAY_CELL_BG,
+    _WEEKDAY_LABEL,
+    _WEEKDAYS,
+    _WEEKEND_CELL_BG,
+    _WEEKEND_COLUMNS,
+    _multiday_bar_palette,
 )
-_MULTIDAY_BAR_OUTLINES_PAST = (
-    (200, 203, 208),
-    (198, 208, 200),
-    (208, 200, 210),
-)
-# Nudge multiday fill down vs. glyphs; height stays ``bar_h`` (same as ``event_line_step``).
-_MULTIDAY_BG_TOP_INSET = 2
-_MULTIDAY_BAR_CORNER_RADIUS = 3
-# Current day: cell tint + frame (events use normal palette; past days stay un-tinted).
-_TODAY_CELL_BG = (232, 242, 255)
-_TODAY_OUTLINE = (50, 90, 145)
-_TODAY_DAY_NUMBER = (18, 52, 110)
-
-_WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-# Padding inside each day cell (day number, event text); must match header alignment math.
-_CELL_INNER_PAD = 4
-# Day-of-month digit: must match ``_draw_day_cell_chrome`` y offset.
-_DAY_NUMBER_TOP_PAD = 3
-# Space between bottom of day number and first multiday bar / event line.
-_GAP_BELOW_DAY_NUMBER = 4
-# List row height = event_px * this factor; multiday stripes use the same step (see
-# ``_multiday_lane_height_px``). Slightly > 1.0 gives air between lines and room inside bars.
-_EVENT_LINE_STEP_FACTOR = 1.26
-# Monday-first week: column indices for Sat/Sun background tint.
-_WEEKEND_COLUMNS = frozenset((5, 6))
-_GRID_COLUMNS = 7
-
-
-def _calendar_font_regular(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    if not _NOTO_REGULAR.is_file():
-        raise FileNotFoundError(f"Bundled font missing: {_NOTO_REGULAR}")
-    return ImageFont.truetype(str(_NOTO_REGULAR), size)
-
-
-def _calendar_font_bold(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    if not _NOTO_BOLD.is_file():
-        raise FileNotFoundError(f"Bundled font missing: {_NOTO_BOLD}")
-    return ImageFont.truetype(str(_NOTO_BOLD), size)
-
-
-@dataclass(frozen=True)
-class MonthFonts:
-    """Scaled fonts and vertical rhythm for a given canvas size."""
-
-    pad: int
-    title_px: int
-    header_px: int
-    dow_px: int
-    daynum_px: int
-    event_px: int
-    event_line_step: int
-    header: ImageFont.FreeTypeFont | ImageFont.ImageFont
-    dow: ImageFont.FreeTypeFont | ImageFont.ImageFont
-    day_number: ImageFont.FreeTypeFont | ImageFont.ImageFont
-    event_regular: ImageFont.FreeTypeFont | ImageFont.ImageFont
-    event_bold: ImageFont.FreeTypeFont | ImageFont.ImageFont
-
-    @classmethod
-    def for_canvas(cls, width: int, height: int) -> MonthFonts:
-        short = min(width, height)
-        title_px = max(16, min(short // 11, 52))
-        header_px = max(22, min(short // 12, 36))
-        dow_px = max(11, int(title_px * 0.42))
-        daynum_px = max(10, int(title_px * 0.38))
-        event_px = max(12, int(title_px * 0.38))
-        pad = max(6, short // 64)
-        return cls(
-            pad=pad,
-            title_px=title_px,
-            header_px=header_px,
-            dow_px=dow_px,
-            daynum_px=daynum_px,
-            event_px=event_px,
-            event_line_step=int(event_px * _EVENT_LINE_STEP_FACTOR),
-            header=_calendar_font_bold(header_px),
-            dow=_calendar_font_regular(dow_px),
-            day_number=_calendar_font_regular(daynum_px),
-            event_regular=_calendar_font_regular(event_px),
-            event_bold=_calendar_font_bold(event_px),
-        )
-
-
-def _events_by_day_from_payload(raw_map: Any) -> dict[date, list[Any]]:
-    out: dict[date, list[Any]] = {}
-    if not raw_map:
-        return out
-    for k, v in raw_map.items():
-        try:
-            out[date.fromisoformat(str(k))] = list(v)
-        except ValueError:
-            continue
-    return out
-
-
-def _multiday_spans_from_payload(raw: Any) -> list[dict[str, Any]]:
-    """Parse ``multiday_spans`` from plugin JSON into dicts with ``date`` objects."""
-    out: list[dict[str, Any]] = []
-    if not raw:
-        return out
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        try:
-            s = date.fromisoformat(str(item["start"]))
-            e = date.fromisoformat(str(item["end"]))
-        except (KeyError, ValueError, TypeError):
-            continue
-        title = str(item.get("title") or "")
-        t = item.get("time")
-        time_s = str(t) if t else None
-        out.append({"title": title, "time": time_s, "start": s, "end": e})
-    return out
-
-
-def _intervals_overlap_col(a0: int, a1: int, b0: int, b1: int) -> bool:
-    """Inclusive column indices within a week row."""
-    return a0 <= b1 and b0 <= a1
-
-
-def _clip_span_to_week(
-    span_start: date,
-    span_end: date,
-    week: tuple[date, ...],
-) -> tuple[int, int] | None:
-    w0, w6 = week[0], week[6]
-    if span_end < w0 or span_start > w6:
-        return None
-    i0 = next(i for i, d in enumerate(week) if d >= span_start)
-    i1 = next(i for i in range(6, -1, -1) if week[i] <= span_end)
-    return i0, i1
-
-
-def _multiday_bar_palette(
-    lane: int, is_past: bool
-) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-    """Bar fill and outline for a multiday lane (cycles three cool pastels)."""
-    i = lane % len(_MULTIDAY_BAR_FILLS)
-    if is_past:
-        return _MULTIDAY_BAR_FILLS_PAST[i], _MULTIDAY_BAR_OUTLINES_PAST[i]
-    return _MULTIDAY_BAR_FILLS[i], _MULTIDAY_BAR_OUTLINES[i]
-
-
-def _assign_multiday_lanes(
-    segments: list[tuple[int, int, dict[str, Any]]],
-) -> tuple[list[tuple[int, int, dict[str, Any], int]], int]:
-    """Greedy lane packing for overlapping week segments. Returns (annotated, lane_count)."""
-    ordered = sorted(segments, key=lambda s: (s[0], -(s[1] - s[0])))
-    lanes: list[list[tuple[int, int]]] = []
-    out: list[tuple[int, int, dict[str, Any], int]] = []
-    for i0, i1, m in ordered:
-        placed: int | None = None
-        for li, occ in enumerate(lanes):
-            if not any(_intervals_overlap_col(i0, i1, a, b) for a, b in occ):
-                occ.append((i0, i1))
-                placed = li
-                break
-        if placed is None:
-            lanes.append([(i0, i1)])
-            placed = len(lanes) - 1
-        out.append((i0, i1, m, placed))
-    return out, len(lanes)
-
-
-def _event_time_and_title(item: Any) -> tuple[str | None, str]:
-    """Time string (or None for all-day / legacy) and title for separate fonts."""
-    if isinstance(item, str):
-        return None, item
-    if isinstance(item, dict):
-        title = str(item.get("title", ""))
-        t = item.get("time")
-        if t:
-            return str(t), title
-        return None, title
-    return None, str(item)
-
-
-def _truncate_time_and_title(
-    draw: ImageDraw.ImageDraw,
-    time_str: str,
-    title_str: str,
-    font_time: ImageFont.FreeTypeFont | ImageFont.ImageFont,
-    font_title: ImageFont.FreeTypeFont | ImageFont.ImageFont,
-    max_w: int,
-) -> tuple[str, str]:
-    """Leave time unbold; truncate title to fit after ``time + space``."""
-    gap = " "
-    w_time = draw.textlength(time_str, font=font_time)
-    w_gap = draw.textlength(gap, font=font_time)
-    if w_time >= max_w:
-        return truncate_to_width(draw, time_str, font_time, max_w), ""
-    budget = max_w - w_time - w_gap
-    if budget <= 0:
-        return time_str, ""
-    return time_str, truncate_to_width(draw, title_str, font_title, int(budget))
 
 
 def _event_row_baseline(y_slot_top: float, fonts: MonthFonts) -> int:
@@ -287,149 +96,6 @@ def _draw_multiday_rounded_fill(
         outline=outline,
         width=1,
     )
-
-
-def _draw_multiday_bar_label(
-    draw: ImageDraw.ImageDraw,
-    *,
-    inner_left: int,
-    max_inner: int,
-    span: dict[str, Any],
-    fonts: MonthFonts,
-    baseline_y: int,
-    muted: bool,
-) -> None:
-    """Draw multiday text using the same colors and layout as list-event rows."""
-    time_part, title_part = _event_time_and_title(span)
-    if time_part:
-        _draw_timed_event_line(
-            draw,
-            left_x=inner_left,
-            baseline_y=baseline_y,
-            max_width=max_inner,
-            time_text=time_part,
-            title_text=title_part,
-            fonts=fonts,
-            muted=muted,
-        )
-    else:
-        _draw_title_only_event_line(
-            draw,
-            left_x=inner_left,
-            baseline_y=baseline_y,
-            max_width=max_inner,
-            title=title_part,
-            fonts=fonts,
-            muted=muted,
-        )
-
-
-def truncate_to_width(
-    draw: ImageDraw.ImageDraw,
-    text: str,
-    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
-    max_w: int,
-) -> str:
-    if max_w <= 0:
-        return ""
-    if draw.textlength(text, font=font) <= max_w:
-        return text
-    ell = "…"
-    lo, hi = 0, len(text)
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        candidate = text[:mid] + ell
-        if draw.textlength(candidate, font=font) <= max_w:
-            lo = mid
-        else:
-            hi = mid - 1
-    return text[:lo] + ell if lo > 0 else ell
-
-
-def _png_bytes(img: Image.Image) -> bytes:
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def _draw_month_title_and_weekday_row(
-    draw: ImageDraw.ImageDraw,
-    *,
-    width: int,
-    year: int,
-    month: int,
-    fonts: MonthFonts,
-) -> tuple[float, float]:
-    """Draw ``Month YYYY`` and Mon–Sun labels.
-
-    Returns ``(grid_top_y, column_width)`` for the week grid below.
-    """
-    pad = fonts.pad
-    y = float(pad)
-
-    month_name = calendar.month_name[month]
-    draw.text((pad, y), f"{month_name} {year}", fill=_HEADER_TEXT, font=fonts.header)
-    y += int(fonts.header_px * 1.12)
-
-    col_w = (width - 2 * pad) / 7.0
-    dow_top = y
-    dow_row_h = int(fonts.dow_px * 1.25)
-    grid_top = dow_top + dow_row_h
-
-    for col in sorted(_WEEKEND_COLUMNS):
-        draw.rectangle(
-            [pad + col * col_w, dow_top, pad + (col + 1) * col_w, grid_top],
-            fill=_WEEKEND_CELL_BG,
-        )
-    for i, label in enumerate(_WEEKDAYS):
-        draw.text((pad + i * col_w, dow_top), label, fill=_WEEKDAY_LABEL, font=fonts.dow)
-
-    return float(grid_top), col_w
-
-
-def _draw_ics_error_banner(
-    draw: ImageDraw.ImageDraw,
-    *,
-    width: int,
-    grid_top: float,
-    message: str,
-    fonts: MonthFonts,
-) -> None:
-    msg_font = _calendar_font_regular(max(12, fonts.title_px // 2))
-    text = message or "Could not load calendar."
-    wrapped = truncate_to_width(draw, text, msg_font, width - 2 * fonts.pad)
-    draw.text((fonts.pad, grid_top + 8), wrapped, fill=_ERROR_TEXT, font=msg_font)
-
-
-def _day_number_row_height_px(fonts: MonthFonts) -> int:
-    """Height from cell top through the bottom of the day-of-month glyph."""
-    if isinstance(fonts.day_number, ImageFont.FreeTypeFont):
-        ascent, descent = fonts.day_number.getmetrics()
-        return _DAY_NUMBER_TOP_PAD + ascent + descent
-    return _DAY_NUMBER_TOP_PAD + int(fonts.daynum_px * 1.28)
-
-
-def _cell_content_top_y(cell_top: float, fonts: MonthFonts) -> int:
-    """First y coordinate below the day number (multiday bars and event lines start here)."""
-    return int(
-        cell_top + _day_number_row_height_px(fonts) + _GAP_BELOW_DAY_NUMBER,
-    )
-
-
-def _multiday_lane_height_px(fonts: MonthFonts) -> int:
-    """One multiday stripe uses exactly the same vertical quantum as a list event row."""
-    return fonts.event_line_step
-
-
-def _event_row_slots_in_cell(
-    row_height: float,
-    fonts: MonthFonts,
-    reserved_top: float = 0,
-) -> int:
-    """Row slots below the day number (and multiday reserve); each is ``event_line_step`` tall."""
-    header = _day_number_row_height_px(fonts) + _GAP_BELOW_DAY_NUMBER
-    step = float(fonts.event_line_step)
-    return max(1, int((row_height - header - reserved_top) // max(11.0, step)))
 
 
 def _draw_ls_advance(
@@ -485,7 +151,7 @@ def _draw_title_only_event_line(
     muted: bool = False,
 ) -> None:
     fill_title = _EVENT_TITLE_PAST if muted else _EVENT_TITLE
-    line = truncate_to_width(draw, title, fonts.event_bold, max_width)
+    line = _truncate_to_width(draw, title, fonts.event_bold, max_width)
     draw.text((left_x, baseline_y), line, fill=fill_title, font=fonts.event_bold, anchor="ls")
 
 
@@ -511,7 +177,7 @@ def _draw_overflow_chip(
     pad_h = max(3, fonts.event_px // 5)
     pad_v = max(1, fonts.event_px // 8)
     inner_text_max = max(1, max_width - 2 * pad_h)
-    label = truncate_to_width(draw, _overflow_chip_label(hidden_count), font, inner_text_max)
+    label = _truncate_to_width(draw, _overflow_chip_label(hidden_count), font, inner_text_max)
     tw = float(draw.textlength(label, font=font))
     line_h = float(fonts.event_line_step)
     if isinstance(font, ImageFont.FreeTypeFont):
@@ -538,11 +204,46 @@ def _draw_overflow_chip(
     )
     draw.text(
         ((x0 + x1) / 2.0, (y0 + y1) / 2.0),
-        truncate_to_width(draw, label, font, max(1, cw - 2)),
+        _truncate_to_width(draw, label, font, max(1, cw - 2)),
         fill=text_fill,
         font=font,
         anchor="mm",
     )
+
+
+def _draw_multiday_bar_label(
+    draw: ImageDraw.ImageDraw,
+    *,
+    inner_left: int,
+    max_inner: int,
+    span: dict[str, Any],
+    fonts: MonthFonts,
+    baseline_y: int,
+    muted: bool,
+) -> None:
+    """Draw multiday text using the same colors and layout as list-event rows."""
+    time_part, title_part = _event_time_and_title(span)
+    if time_part:
+        _draw_timed_event_line(
+            draw,
+            left_x=inner_left,
+            baseline_y=baseline_y,
+            max_width=max_inner,
+            time_text=time_part,
+            title_text=title_part,
+            fonts=fonts,
+            muted=muted,
+        )
+    else:
+        _draw_title_only_event_line(
+            draw,
+            left_x=inner_left,
+            baseline_y=baseline_y,
+            max_width=max_inner,
+            title=title_part,
+            fonts=fonts,
+            muted=muted,
+        )
 
 
 def _draw_events_in_cell(
@@ -607,13 +308,6 @@ def _draw_events_in_cell(
         line_top += fonts.event_line_step
 
 
-def _reserved_px_for_column_bar_count(k: int, bar_h: int, bar_gap: int) -> float:
-    """Vertical space for ``k`` stacked multiday bars (``k == 0`` → none)."""
-    if k <= 0:
-        return 0.0
-    return float(k * bar_h + (k - 1) * bar_gap)
-
-
 def _draw_multiday_bars_for_week(
     draw: ImageDraw.ImageDraw,
     *,
@@ -667,11 +361,7 @@ def _draw_multiday_bars_for_week(
             muted=is_past_span,
         )
 
-    # Rows needed = max(lane)+1 among spans covering the column (not span count: lanes can skip).
-    bars_per_col = [0] * _GRID_COLUMNS
-    for i0, i1, _m, lane in annotated:
-        for ci in range(i0, i1 + 1):
-            bars_per_col[ci] = max(bars_per_col[ci], lane + 1)
+    bars_per_col = bars_per_column_from_annotated(annotated)
     return [
         _reserved_px_for_column_bar_count(bars_per_col[i], bar_h, bar_gap)
         for i in range(_GRID_COLUMNS)
@@ -761,6 +451,61 @@ def _draw_day_cell_events(
         muted=is_past,
         reserved_top=reserved_top,
     )
+
+
+def _draw_month_title_and_weekday_row(
+    draw: ImageDraw.ImageDraw,
+    *,
+    width: int,
+    year: int,
+    month: int,
+    fonts: MonthFonts,
+) -> tuple[float, float]:
+    """Draw ``Month YYYY`` and Mon–Sun labels.
+
+    Returns ``(grid_top_y, column_width)`` for the week grid below.
+    """
+    pad = fonts.pad
+    y = float(pad)
+
+    month_name = calendar.month_name[month]
+    draw.text((pad, y), f"{month_name} {year}", fill=_HEADER_TEXT, font=fonts.header)
+    y += int(fonts.header_px * 1.12)
+
+    col_w = (width - 2 * pad) / 7.0
+    dow_top = y
+    dow_row_h = int(fonts.dow_px * 1.25)
+    grid_top = dow_top + dow_row_h
+
+    for col in sorted(_WEEKEND_COLUMNS):
+        draw.rectangle(
+            [pad + col * col_w, dow_top, pad + (col + 1) * col_w, grid_top],
+            fill=_WEEKEND_CELL_BG,
+        )
+    for i, label in enumerate(_WEEKDAYS):
+        draw.text((pad + i * col_w, dow_top), label, fill=_WEEKDAY_LABEL, font=fonts.dow)
+
+    return float(grid_top), col_w
+
+
+def _draw_ics_error_banner(
+    draw: ImageDraw.ImageDraw,
+    *,
+    width: int,
+    grid_top: float,
+    message: str,
+    fonts: MonthFonts,
+) -> None:
+    msg_font = _calendar_font_regular(max(12, fonts.title_px // 2))
+    text = message or "Could not load calendar."
+    wrapped = _truncate_to_width(draw, text, msg_font, width - 2 * fonts.pad)
+    draw.text((fonts.pad, grid_top + 8), wrapped, fill=_ERROR_TEXT, font=msg_font)
+
+
+def _png_bytes(img: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def render_month_png(

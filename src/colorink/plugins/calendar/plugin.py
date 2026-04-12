@@ -14,6 +14,33 @@ from colorink.plugins.calendar.ics import events_by_day_from_ics, host_for_label
 from colorink.plugins.calendar.render import render_month_png
 from colorink.plugins.protocol import DeviceContext, ImagePlugin
 
+_PLACEHOLDER_URL = "https://example.com/calendar.ics"
+
+
+def _make_result(
+    *,
+    ok: bool,
+    error: str,
+    year: int,
+    month: int,
+    events_by_day: dict[str, Any],
+    multiday_spans: list[Any],
+    url_label: str,
+    timezone: str,
+    today: str,
+) -> dict[str, Any]:
+    return {
+        "ok": ok,
+        "error": error,
+        "year": year,
+        "month": month,
+        "events_by_day": events_by_day,
+        "multiday_spans": multiday_spans,
+        "url_label": url_label,
+        "timezone": timezone,
+        "today": today,
+    }
+
 
 class CalendarPlugin(ImagePlugin):
     """Fetches an ICS feed from a URL and draws a month grid with events."""
@@ -26,7 +53,7 @@ class CalendarPlugin(ImagePlugin):
 
     def default_config(self) -> dict[str, Any]:
         return {
-            "ics_url": "https://example.com/calendar.ics",
+            "ics_url": _PLACEHOLDER_URL,
             "timezone": "UTC",
             "refresh_interval_seconds": 3600,
             "dither_mode": DitherMode.FLOYD_STEINBERG,
@@ -45,18 +72,18 @@ class CalendarPlugin(ImagePlugin):
             now = datetime.now(UTC)
             year, month = now.year, now.month
 
-        if not url or url == "https://example.com/calendar.ics":
-            return {
-                "ok": False,
-                "error": "Set ics_url in plugin config to a calendar feed URL.",
-                "year": year,
-                "month": month,
-                "events_by_day": {},
-                "multiday_spans": [],
-                "url_label": "",
-                "timezone": str(tz),
-                "today": today_iso,
-            }
+        if not url or url == _PLACEHOLDER_URL:
+            return _make_result(
+                ok=False,
+                error="Set ics_url in plugin config to a calendar feed URL.",
+                year=year,
+                month=month,
+                events_by_day={},
+                multiday_spans=[],
+                url_label="",
+                timezone=str(tz),
+                today=today_iso,
+            )
 
         try:
             with httpx.Client(timeout=25.0) as client:
@@ -64,29 +91,29 @@ class CalendarPlugin(ImagePlugin):
                 response.raise_for_status()
                 ics_bytes = response.content
             by_day, multiday_spans = events_by_day_from_ics(ics_bytes, year, month, tz)
-            return {
-                "ok": True,
-                "error": "",
-                "year": year,
-                "month": month,
-                "events_by_day": {k.isoformat(): v for k, v in by_day.items()},
-                "multiday_spans": multiday_spans,
-                "url_label": host_for_label(url),
-                "timezone": str(tz),
-                "today": today_iso,
-            }
+            return _make_result(
+                ok=True,
+                error="",
+                year=year,
+                month=month,
+                events_by_day={k.isoformat(): v for k, v in by_day.items()},
+                multiday_spans=multiday_spans,
+                url_label=host_for_label(url),
+                timezone=str(tz),
+                today=today_iso,
+            )
         except (httpx.HTTPError, OSError, ValueError) as e:
-            return {
-                "ok": False,
-                "error": str(e),
-                "year": year,
-                "month": month,
-                "events_by_day": {},
-                "multiday_spans": [],
-                "url_label": host_for_label(url),
-                "timezone": str(tz),
-                "today": today_iso,
-            }
+            return _make_result(
+                ok=False,
+                error=str(e),
+                year=year,
+                month=month,
+                events_by_day={},
+                multiday_spans=[],
+                url_label=host_for_label(url),
+                timezone=str(tz),
+                today=today_iso,
+            )
 
     def render_raw(
         self,
