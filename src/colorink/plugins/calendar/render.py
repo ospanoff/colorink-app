@@ -165,14 +165,14 @@ def _overflow_chip_label(hidden_count: int) -> str:
 def _draw_overflow_chip(
     draw: ImageDraw.ImageDraw,
     *,
-    center_x: float,
+    left_x: float,
     line_top: float,
     max_width: int,
     hidden_count: int,
     fonts: MonthFonts,
     muted: bool = False,
 ) -> None:
-    """Pill-shaped overflow label when the list is truncated; centered in the cell."""
+    """Pill-shaped overflow label when the list is truncated; left-aligned with event text."""
     font = fonts.event_bold
     pad_h = max(3, fonts.event_px // 5)
     pad_v = max(1, fonts.event_px // 8)
@@ -188,10 +188,10 @@ def _draw_overflow_chip(
     ch = int(min(float(text_h + 2 * pad_v), max(8.0, line_h - 1.0)))
     cw = int(min(tw + 2.0 * pad_h, float(max(1, max_width))))
     y0 = line_top + max(0.0, (line_h - float(ch)) / 2.0)
-    half = float(cw) / 2.0
-    x0 = center_x - half
-    x1 = center_x + half
+    x0 = left_x
+    x1 = left_x + float(cw)
     y1 = y0 + float(ch)
+    cy = (y0 + y1) / 2.0
     fill_bg = _OVERFLOW_CHIP_BG_PAST if muted else _OVERFLOW_CHIP_BG
     outline = _OVERFLOW_CHIP_OUTLINE_PAST if muted else _OVERFLOW_CHIP_OUTLINE
     text_fill = _OVERFLOW_PAST if muted else _OVERFLOW_MORE
@@ -203,11 +203,11 @@ def _draw_overflow_chip(
         width=1,
     )
     draw.text(
-        ((x0 + x1) / 2.0, (y0 + y1) / 2.0),
+        (x0 + float(pad_h), cy),
         _truncate_to_width(draw, label, font, max(1, cw - 2)),
         fill=text_fill,
         font=font,
-        anchor="mm",
+        anchor="lm",
     )
 
 
@@ -272,7 +272,7 @@ def _draw_events_in_cell(
             if overflow:
                 _draw_overflow_chip(
                     draw,
-                    center_x=float(text_left) + float(max_w) / 2.0,
+                    left_x=float(text_left),
                     line_top=float(line_top),
                     max_width=max_w,
                     hidden_count=len(items) - event_limit,
@@ -477,11 +477,6 @@ def _draw_month_title_and_weekday_row(
     dow_row_h = int(fonts.dow_px * 1.25)
     grid_top = dow_top + dow_row_h
 
-    for col in sorted(_WEEKEND_COLUMNS):
-        draw.rectangle(
-            [pad + col * col_w, dow_top, pad + (col + 1) * col_w, grid_top],
-            fill=_WEEKEND_CELL_BG,
-        )
     for i, label in enumerate(_WEEKDAYS):
         draw.text((pad + i * col_w, dow_top), label, fill=_WEEKDAY_LABEL, font=fonts.dow)
 
