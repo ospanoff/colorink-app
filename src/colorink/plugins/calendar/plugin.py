@@ -34,6 +34,8 @@ class CalendarPlugin(ImagePlugin):
 
     def fetch_data(self, plugin_config: dict[str, Any], device: DeviceContext) -> dict[str, Any]:
         _ = device
+        tz = ZoneInfo(str(plugin_config.get("timezone") or "UTC"))
+        today_iso = datetime.now(tz).date().isoformat()
         url = str(plugin_config.get("ics_url", "")).strip()
         ty = plugin_config.get("test_year")
         tm = plugin_config.get("test_month")
@@ -51,10 +53,10 @@ class CalendarPlugin(ImagePlugin):
                 "month": month,
                 "events_by_day": {},
                 "url_label": "",
-                "timezone": str(plugin_config.get("timezone") or "UTC"),
+                "timezone": str(tz),
+                "today": today_iso,
             }
 
-        tz = ZoneInfo(str(plugin_config.get("timezone") or "UTC"))
         try:
             with httpx.Client(timeout=25.0) as client:
                 response = client.get(url, follow_redirects=True)
@@ -69,6 +71,7 @@ class CalendarPlugin(ImagePlugin):
                 "events_by_day": {k.isoformat(): v for k, v in events.items()},
                 "url_label": host_for_label(url),
                 "timezone": str(tz),
+                "today": today_iso,
             }
         except (httpx.HTTPError, OSError, ValueError) as e:
             return {
@@ -79,6 +82,7 @@ class CalendarPlugin(ImagePlugin):
                 "events_by_day": {},
                 "url_label": host_for_label(url),
                 "timezone": str(tz),
+                "today": today_iso,
             }
 
     def render_raw(

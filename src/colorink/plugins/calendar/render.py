@@ -31,6 +31,14 @@ _EVENT_TIME = (105, 105, 105)
 _EVENT_TITLE = (28, 28, 28)
 _OVERFLOW_MORE = (60, 60, 120)
 _ERROR_TEXT = (160, 0, 0)
+# Days before today: muted event text only (cell chrome unchanged).
+_EVENT_TIME_PAST = (150, 150, 152)
+_EVENT_TITLE_PAST = (128, 128, 130)
+_OVERFLOW_PAST = (105, 105, 125)
+# Current day: cell tint + frame (events use normal palette; past days stay un-tinted).
+_TODAY_CELL_BG = (232, 242, 255)
+_TODAY_OUTLINE = (50, 90, 145)
+_TODAY_DAY_NUMBER = (18, 52, 110)
 
 _WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 # Padding inside each day cell (day number, event text); must match header alignment math.
@@ -253,18 +261,21 @@ def _draw_timed_event_line(
     time_text: str,
     title_text: str,
     fonts: MonthFonts,
+    muted: bool = False,
 ) -> None:
+    fill_time = _EVENT_TIME_PAST if muted else _EVENT_TIME
+    fill_title = _EVENT_TITLE_PAST if muted else _EVENT_TITLE
     t_draw, title_draw = _truncate_time_and_title(
         draw, time_text, title_text, fonts.event_regular, fonts.event_bold, max_width
     )
     x = float(left_x)
-    x = _draw_ls_advance(draw, x, baseline_y, t_draw, fonts.event_regular, _EVENT_TIME)
+    x = _draw_ls_advance(draw, x, baseline_y, t_draw, fonts.event_regular, fill_time)
     if title_draw:
-        x = _draw_ls_advance(draw, x, baseline_y, " ", fonts.event_regular, _EVENT_TIME)
+        x = _draw_ls_advance(draw, x, baseline_y, " ", fonts.event_regular, fill_time)
         draw.text(
             (x, baseline_y),
             title_draw,
-            fill=_EVENT_TITLE,
+            fill=fill_title,
             font=fonts.event_bold,
             anchor="ls",
         )
@@ -278,9 +289,11 @@ def _draw_title_only_event_line(
     max_width: int,
     title: str,
     fonts: MonthFonts,
+    muted: bool = False,
 ) -> None:
+    fill_title = _EVENT_TITLE_PAST if muted else _EVENT_TITLE
     line = truncate_to_width(draw, title, fonts.event_bold, max_width)
-    draw.text((left_x, baseline_y), line, fill=_EVENT_TITLE, font=fonts.event_bold, anchor="ls")
+    draw.text((left_x, baseline_y), line, fill=fill_title, font=fonts.event_bold, anchor="ls")
 
 
 def _draw_overflow_footer(
@@ -291,12 +304,14 @@ def _draw_overflow_footer(
     max_width: int,
     hidden_count: int,
     fonts: MonthFonts,
+    muted: bool = False,
 ) -> None:
+    fill_ov = _OVERFLOW_PAST if muted else _OVERFLOW_MORE
     more = f"+{hidden_count} more"
     draw.text(
         (left_x, baseline_y),
         truncate_to_width(draw, more, fonts.event_bold, max_width),
-        fill=_OVERFLOW_MORE,
+        fill=fill_ov,
         font=fonts.event_bold,
         anchor="ls",
     )
@@ -311,6 +326,7 @@ def _draw_events_in_cell(
     row_height: float,
     items: list[Any],
     fonts: MonthFonts,
+    muted: bool = False,
 ) -> None:
     """Draw stacked event lines inside one day cell."""
     text_left = int(cell_left + _CELL_INNER_PAD)
@@ -330,6 +346,7 @@ def _draw_events_in_cell(
                 max_width=max_w,
                 hidden_count=len(items) - max_rows,
                 fonts=fonts,
+                muted=muted,
             )
             break
 
@@ -343,6 +360,7 @@ def _draw_events_in_cell(
                 time_text=time_part,
                 title_text=title_part,
                 fonts=fonts,
+                muted=muted,
             )
         else:
             _draw_title_only_event_line(
@@ -352,6 +370,7 @@ def _draw_events_in_cell(
                 max_width=max_w,
                 title=title_part,
                 fonts=fonts,
+                muted=muted,
             )
 
         line_top += fonts.event_line_step
@@ -371,10 +390,15 @@ def _draw_day_cell(
     col_w: float,
     events_by_day: dict[date, list[Any]],
     fonts: MonthFonts,
+    today: date,
 ) -> None:
     """Background, grid outline, day number, and optional event stack for one grid cell."""
     is_weekend = day_index in _WEEKEND_COLUMNS
-    cell_fill = _WEEKEND_CELL_BG if is_weekend else _WEEKDAY_CELL_BG
+    is_today = d == today
+    if is_today:
+        cell_fill = _TODAY_CELL_BG
+    else:
+        cell_fill = _WEEKEND_CELL_BG if is_weekend else _WEEKDAY_CELL_BG
     draw.rectangle(
         [cell_left, cell_top, cell_right, cell_top + row_h],
         fill=cell_fill,
@@ -382,7 +406,25 @@ def _draw_day_cell(
         width=1,
     )
 
-    day_color = _DAY_IN_MONTH if d.month == focused_month else _DAY_OTHER_MONTH
+    if is_today:
+        inset = 1.0
+        draw.rectangle(
+            [
+                cell_left + inset,
+                cell_top + inset,
+                cell_right - inset,
+                cell_top + row_h - inset,
+            ],
+            outline=_TODAY_OUTLINE,
+            width=2,
+        )
+
+    if is_today:
+        day_color = _TODAY_DAY_NUMBER
+    else:
+        day_color = _DAY_IN_MONTH if d.month == focused_month else _DAY_OTHER_MONTH
+    is_past = d < today
+
     draw.text(
         (cell_left + _CELL_INNER_PAD, cell_top + 3),
         str(d.day),
@@ -402,6 +444,7 @@ def _draw_day_cell(
         row_height=row_h,
         items=day_items,
         fonts=fonts,
+        muted=is_past,
     )
 
 
@@ -417,6 +460,14 @@ def render_month_png(
     ok = bool(data.get("ok"))
     err = str(data.get("error", ""))
     events_by_day = _events_by_day_from_payload(data.get("events_by_day"))
+    raw_today = data.get("today")
+    if raw_today:
+        try:
+            today = date.fromisoformat(str(raw_today))
+        except ValueError:
+            today = date.today()
+    else:
+        today = date.today()
 
     img = Image.new("RGB", (width, height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
@@ -453,6 +504,7 @@ def render_month_png(
                 col_w=col_w,
                 events_by_day=events_by_day,
                 fonts=fonts,
+                today=today,
             )
 
     return _png_bytes(img)
