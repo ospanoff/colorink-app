@@ -21,10 +21,9 @@ def rolling_weeks_and_visible(
 ) -> tuple[list[tuple[date, ...]], frozenset[date]]:
     """Mon-first weeks: first row is the week that contains ``today``, for the given view month.
 
-    ``year``/``month`` select which month's **grid size** (number of rows) matches
-    :meth:`calendar.Calendar.monthdatescalendar` - they may differ from the calendar month of
-    ``today`` when ``test_year``/``test_month`` pin the view. ``today`` only sets where the
-    rolling window starts (Monday of that week is the first row's Monday).
+    ``year``/``month`` fix the visible month (row count from
+    :meth:`calendar.Calendar.monthdatescalendar`). ``today`` picks the first week row: the
+    week that contains this calendar date (its Monday starts row 0).
     """
     cal = calendar.Calendar(firstweekday=_FIRST_WEEKDAY)
     n_weeks = len(cal.monthdatescalendar(year, month))
@@ -191,21 +190,21 @@ def _process_timed_event(
 
 def events_by_day_from_ics(
     ics_bytes: bytes,
-    year: int,
-    month: int,
     tz: ZoneInfo,
     today: date,
 ) -> tuple[dict[date, list[IcsEventRow]], list[MultidaySpanDict]]:
     """Map local dates to events for the **visible rolling grid** (Mon-Sun weeks).
 
-    The visible date set matches :func:`rolling_weeks_and_visible` (first week = week of
-    ``today``; row count = classic month card for ``(year, month)``).
+    Row count and visible dates come from :func:`rolling_weeks_and_visible` using the
+    calendar month of ``today`` and that same ``today`` as the anchor (first week = week
+    of ``today``).
 
     **All-day** instances (``DTSTART`` is a ``DATE``) use one path: clipped to the grid and
     emitted to ``multiday_spans`` (``start``/``end`` inclusive may be the same day).
 
     **Timed** instances use ``events_by_day`` - once per day if they span multiple local days.
     """
+    year, month = today.year, today.month
     cal = Calendar.from_ical(ics_bytes)
     query = of(cal, skip_bad_series=True)
     _, visible_dates = rolling_weeks_and_visible(year, month, today)

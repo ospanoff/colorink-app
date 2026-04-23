@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -15,6 +15,16 @@ from colorink.plugins.calendar.render import render_month_png
 from colorink.plugins.protocol import DeviceContext, ImagePlugin
 
 _PLACEHOLDER_URL = "https://example.com/calendar.ics"
+
+
+def _today_from_config(plugin_config: dict[str, Any], tz: ZoneInfo) -> date:
+    """Local calendar day: optional ``today`` in config, else now in ``tz``."""
+    raw = plugin_config.get("today")
+    if raw is None or raw == "":
+        return datetime.now(tz).date()
+    if isinstance(raw, date):
+        return raw
+    return date.fromisoformat(str(raw))
 
 
 def _make_result(
@@ -62,16 +72,10 @@ class CalendarPlugin(ImagePlugin):
     def fetch_data(self, plugin_config: dict[str, Any], device: DeviceContext) -> dict[str, Any]:
         _ = device
         tz = ZoneInfo(str(plugin_config.get("timezone") or "UTC"))
-        today_d: date = datetime.now(tz).date()
+        today_d = _today_from_config(plugin_config, tz)
         today_iso = today_d.isoformat()
+        year, month = today_d.year, today_d.month
         url = str(plugin_config.get("ics_url", "")).strip()
-        ty = plugin_config.get("test_year")
-        tm = plugin_config.get("test_month")
-        if ty is not None and tm is not None:
-            year, month = int(ty), int(tm)
-        else:
-            now = datetime.now(UTC)
-            year, month = now.year, now.month
 
         if not url or url == _PLACEHOLDER_URL:
             return _make_result(
@@ -91,7 +95,7 @@ class CalendarPlugin(ImagePlugin):
                 response = client.get(url, follow_redirects=True)
                 response.raise_for_status()
                 ics_bytes = response.content
-            by_day, multiday_spans = events_by_day_from_ics(ics_bytes, year, month, tz, today_d)
+            by_day, multiday_spans = events_by_day_from_ics(ics_bytes, tz, today_d)
             return _make_result(
                 ok=True,
                 error="",

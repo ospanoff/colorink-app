@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import date
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from colorink.plugins.config import PluginBaseConfig
 
@@ -24,17 +25,10 @@ class CalendarPluginConfig(PluginBaseConfig):
         min_length=1,
         description="IANA timezone for event times and which calendar day an event falls on.",
     )
-    test_year: int | None = Field(
+    today: date | None = Field(
         default=None,
-        ge=1,
-        le=9999,
-        description="Year (with test_month). Omit both for current UTC month.",
-    )
-    test_month: int | None = Field(
-        default=None,
-        ge=1,
-        le=12,
-        description="Month 1-12 (with test_year). Omit both for current UTC month.",
+        description="Optional calendar day to pin the view (year/month and rolling grid). "
+        "Omit to use the current local day in the configured timezone.",
     )
 
     @field_validator("timezone")
@@ -48,10 +42,3 @@ class CalendarPluginConfig(PluginBaseConfig):
         except ZoneInfoNotFoundError as e:
             raise ValueError(f"Unknown IANA timezone: {s!r}") from e
         return s
-
-    @model_validator(mode="after")
-    def _test_year_month_both_or_neither(self) -> CalendarPluginConfig:
-        y, m = self.test_year, self.test_month
-        if (y is None) != (m is None):
-            raise ValueError("test_year and test_month must both be set or both omitted")
-        return self
