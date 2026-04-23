@@ -70,6 +70,8 @@ _EVENT_LINE_STEP_FACTOR = 1.26
 # Monday-first week: column indices for Sat/Sun background tint.
 _WEEKEND_COLUMNS = frozenset((5, 6))
 _GRID_COLUMNS = 7
+# Vertical space between one month's section and the next (after last week of prior month).
+_MONTH_INTER_BLOCK_GAP = 10
 
 
 def _multiday_bar_palette(

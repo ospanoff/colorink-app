@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -62,7 +62,8 @@ class CalendarPlugin(ImagePlugin):
     def fetch_data(self, plugin_config: dict[str, Any], device: DeviceContext) -> dict[str, Any]:
         _ = device
         tz = ZoneInfo(str(plugin_config.get("timezone") or "UTC"))
-        today_iso = datetime.now(tz).date().isoformat()
+        today_d: date = datetime.now(tz).date()
+        today_iso = today_d.isoformat()
         url = str(plugin_config.get("ics_url", "")).strip()
         ty = plugin_config.get("test_year")
         tm = plugin_config.get("test_month")
@@ -90,7 +91,7 @@ class CalendarPlugin(ImagePlugin):
                 response = client.get(url, follow_redirects=True)
                 response.raise_for_status()
                 ics_bytes = response.content
-            by_day, multiday_spans = events_by_day_from_ics(ics_bytes, year, month, tz)
+            by_day, multiday_spans = events_by_day_from_ics(ics_bytes, year, month, tz, today_d)
             return _make_result(
                 ok=True,
                 error="",

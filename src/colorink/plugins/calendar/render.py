@@ -15,6 +15,7 @@ from colorink.plugins.calendar.fonts import (
     _truncate_time_and_title,
     _truncate_to_width,
 )
+from colorink.plugins.calendar.ics import rolling_weeks_and_visible
 from colorink.plugins.calendar.layout import (
     _assign_multiday_lanes,
     _cell_content_top_y,
@@ -22,6 +23,7 @@ from colorink.plugins.calendar.layout import (
     _event_row_slots_in_cell,
     _event_time_and_title,
     _events_by_day_from_payload,
+    _group_weeks_by_week_start_month,
     _multiday_lane_height_px,
     _multiday_spans_from_payload,
     _reserved_px_for_column_bar_count,
@@ -40,6 +42,7 @@ from colorink.plugins.calendar.palette import (
     _GRID_COLUMNS,
     _GRID_LINE,
     _HEADER_TEXT,
+    _MONTH_INTER_BLOCK_GAP,
     _MULTIDAY_BAR_CORNER_RADIUS,
     _MULTIDAY_BG_TOP_INSET,
     _OVERFLOW_CHIP_BG,
@@ -53,8 +56,6 @@ from colorink.plugins.calendar.palette import (
     _TODAY_DAY_NUMBER,
     _TODAY_OUTLINE,
     _WEEKDAY_CELL_BG,
-    _WEEKDAY_LABEL,
-    _WEEKDAYS,
     _WEEKEND_CELL_BG,
     _WEEKEND_COLUMNS,
     _multiday_bar_palette,
@@ -313,7 +314,7 @@ def _draw_multiday_bars_for_week(
     *,
     week: tuple[date, ...],
     cell_top: float,
-    pad: float,
+    pad: int,
     col_w: float,
     fonts: MonthFonts,
     spans: list[dict[str, Any]],
@@ -453,34 +454,35 @@ def _draw_day_cell_events(
     )
 
 
-def _draw_month_title_and_weekday_row(
+def _month_section_title_font(fonts: MonthFonts) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Slightly smaller than ``fonts.header`` for month block titles."""
+    return _calendar_font_regular(max(14, int(fonts.header_px * 0.78)))
+
+
+def _month_block_lead_height(fonts: MonthFonts) -> float:
+    """Height for month title + air below (uses long name for a stable row budget)."""
+    font = _month_section_title_font(fonts)
+    d = ImageDraw.Draw(Image.new("RGB", (2, 2)))
+    sample = "September"
+    d.text((0, 0), sample, font=font, fill=0, anchor="lt")
+    b = d.textbbox((0, 0), sample, font=font, anchor="lt")
+    th = float(b[3] - b[1])
+    return th + 2.0 + 4.0
+
+
+def _draw_month_block_header(
     draw: ImageDraw.ImageDraw,
     *,
-    width: int,
-    year: int,
-    month: int,
+    pad: int,
+    y0: float,
+    month_name: str,
+    lead_h: float,
     fonts: MonthFonts,
-) -> tuple[float, float]:
-    """Draw ``Month YYYY`` and Mon-Sun labels.
-
-    Returns ``(grid_top_y, column_width)`` for the week grid below.
-    """
-    pad = fonts.pad
-    y = float(pad)
-
-    month_name = calendar.month_name[month]
-    draw.text((pad, y), f"{month_name} {year}", fill=_HEADER_TEXT, font=fonts.header)
-    y += int(fonts.header_px * 1.12)
-
-    col_w = (width - 2 * pad) / 7.0
-    dow_top = y
-    dow_row_h = int(fonts.dow_px * 1.25)
-    grid_top = dow_top + dow_row_h
-
-    for i, label in enumerate(_WEEKDAYS):
-        draw.text((pad + i * col_w, dow_top), label, fill=_WEEKDAY_LABEL, font=fonts.dow)
-
-    return float(grid_top), col_w
+) -> float:
+    """Draw month title only; return ``y0 + lead_h`` (start of this block's first week)."""
+    tfont = _month_section_title_font(fonts)
+    draw.text((pad, y0 + 2.0), month_name, font=tfont, fill=_HEADER_TEXT, anchor="lt")
+    return y0 + lead_h
 
 
 def _draw_ics_error_banner(
@@ -528,35 +530,35 @@ def render_month_png(
     img = Image.new("RGB", (width, height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
     fonts = MonthFonts.for_canvas(width, height)
+    col_w = (width - 2.0 * fonts.pad) / 7.0
 
-    grid_top, col_w = _draw_month_title_and_weekday_row(
-        draw, width=width, year=year, month=month, fonts=fonts
-    )
-    grid_h = height - grid_top - fonts.pad
-
-    cal_grid = calendar.Calendar(firstweekday=calendar.MONDAY)
-    weeks = cal_grid.monthdatescalendar(year, month)
+    weeks, _ = rolling_weeks_and_visible(year, month, today)
     n_weeks = len(weeks)
-    row_h = grid_h / float(n_weeks) if n_weeks else grid_h
+    month_blocks = _group_weeks_by_week_start_month(weeks)
+    n_blocks = len(month_blocks)
+    inter = _MONTH_INTER_BLOCK_GAP
+    lead = _month_block_lead_height(fonts)
+    block_overhead = lead * n_blocks + inter * max(0, n_blocks - 1)
+    grid_h = float(height) - 2.0 * fonts.pad
+    row_h = (grid_h - block_overhead) / float(n_weeks) if n_weeks else grid_h
 
     if not ok:
-        _draw_ics_error_banner(draw, width=width, grid_top=grid_top, message=err, fonts=fonts)
+        _draw_ics_error_banner(draw, width=width, grid_top=fonts.pad, message=err, fonts=fonts)
         return _png_bytes(img)
 
     bar_h = _multiday_lane_height_px(fonts)
     bar_gap = 0
 
-    for week_index, week in enumerate(weeks):
-        cell_top = grid_top + week_index * row_h
-        week_t = tuple(week)
+    def _draw_one_week(week: tuple[date, ...], y0: float) -> None:
+        p, wk = fonts.pad, tuple(week)
         for day_index, d in enumerate(week):
-            cell_left = fonts.pad + day_index * col_w
-            cell_right = fonts.pad + (day_index + 1) * col_w
+            cl = p + day_index * col_w
+            cr = p + (day_index + 1) * col_w
             _draw_day_cell_chrome(
                 draw,
-                cell_left=cell_left,
-                cell_top=cell_top,
-                cell_right=cell_right,
+                cell_left=cl,
+                cell_top=y0,
+                cell_right=cr,
                 row_h=row_h,
                 day_index=day_index,
                 d=d,
@@ -564,12 +566,11 @@ def render_month_png(
                 fonts=fonts,
                 today=today,
             )
-
-        reserved_per_column = _draw_multiday_bars_for_week(
+        reserved = _draw_multiday_bars_for_week(
             draw,
-            week=week_t,
-            cell_top=cell_top,
-            pad=float(fonts.pad),
+            week=wk,
+            cell_top=y0,
+            pad=p,
             col_w=col_w,
             fonts=fonts,
             spans=multiday_spans,
@@ -577,20 +578,35 @@ def render_month_png(
             bar_h=bar_h,
             bar_gap=bar_gap,
         )
-
         for day_index, d in enumerate(week):
-            cell_left = fonts.pad + day_index * col_w
+            cl = p + day_index * col_w
             _draw_day_cell_events(
                 draw,
-                cell_left=cell_left,
-                cell_top=cell_top,
+                cell_left=cl,
+                cell_top=y0,
                 col_w=col_w,
                 row_h=row_h,
                 d=d,
                 events_by_day=events_by_day,
                 fonts=fonts,
                 today=today,
-                reserved_top=reserved_per_column[day_index],
+                reserved_top=reserved[day_index],
             )
+
+    y = float(fonts.pad)
+    for bi, (ym, wlist) in enumerate(month_blocks):
+        if bi > 0:
+            y += inter
+        y = _draw_month_block_header(
+            draw,
+            pad=fonts.pad,
+            y0=y,
+            month_name=calendar.month_name[ym[1]],
+            lead_h=lead,
+            fonts=fonts,
+        )
+        for week in wlist:
+            _draw_one_week(week, y)
+            y += row_h
 
     return _png_bytes(img)

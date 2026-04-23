@@ -47,6 +47,30 @@ def _multiday_spans_from_payload(raw: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _group_weeks_by_week_start_month(
+    weeks: list[tuple[date, ...]],
+) -> list[tuple[tuple[int, int], list[tuple[date, ...]]]]:
+    """Split Mon-first week rows into blocks that share the same (year, month) on day 0.
+
+    Day 0 is Monday. Used so month title bands align when the grid spans two months.
+    """
+    if not weeks:
+        return []
+    out: list[tuple[tuple[int, int], list[tuple[date, ...]]]] = []
+    cur = (weeks[0][0].year, weeks[0][0].month)
+    run: list[tuple[date, ...]] = [weeks[0]]
+    for w in weeks[1:]:
+        k = (w[0].year, w[0].month)
+        if k == cur:
+            run.append(w)
+        else:
+            out.append((cur, run))
+            cur = k
+            run = [w]
+    out.append((cur, run))
+    return out
+
+
 def _event_time_and_title(item: Any) -> tuple[str | None, str]:
     """Time string (or None for all-day / legacy) and title for separate fonts."""
     if isinstance(item, str):

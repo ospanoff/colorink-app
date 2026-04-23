@@ -16,10 +16,25 @@ from recurring_ical_events import of
 _FIRST_WEEKDAY = calendar.MONDAY
 
 
-def visible_dates_for_month_grid(year: int, month: int) -> frozenset[date]:
-    """All dates shown in the month view grid (includes spillover from adjacent months)."""
-    weeks = calendar.Calendar(firstweekday=_FIRST_WEEKDAY).monthdatescalendar(year, month)
-    return frozenset(d for week in weeks for d in week)
+def rolling_weeks_and_visible(
+    year: int, month: int, today: date
+) -> tuple[list[tuple[date, ...]], frozenset[date]]:
+    """Mon-first weeks: first row is the week that contains ``today``, for the given view month.
+
+    ``year``/``month`` select which month's **grid size** (number of rows) matches
+    :meth:`calendar.Calendar.monthdatescalendar` - they may differ from the calendar month of
+    ``today`` when ``test_year``/``test_month`` pin the view. ``today`` only sets where the
+    rolling window starts (Monday of that week is the first row's Monday).
+    """
+    cal = calendar.Calendar(firstweekday=_FIRST_WEEKDAY)
+    n_weeks = len(cal.monthdatescalendar(year, month))
+    monday0 = today - timedelta(days=today.weekday())
+    weeks: list[tuple[date, ...]] = []
+    for i in range(n_weeks):
+        w0 = monday0 + timedelta(days=7 * i)
+        weeks.append(tuple(w0 + timedelta(days=d) for d in range(7)))
+    visible = frozenset(d for w in weeks for d in w)
+    return weeks, visible
 
 
 class IcsEventRow(TypedDict):
@@ -179,8 +194,12 @@ def events_by_day_from_ics(
     year: int,
     month: int,
     tz: ZoneInfo,
+    today: date,
 ) -> tuple[dict[date, list[IcsEventRow]], list[MultidaySpanDict]]:
-    """Map local dates to events for the **visible month grid** (Mon-Sun weeks).
+    """Map local dates to events for the **visible rolling grid** (Mon-Sun weeks).
+
+    The visible date set matches :func:`rolling_weeks_and_visible` (first week = week of
+    ``today``; row count = classic month card for ``(year, month)``).
 
     **All-day** instances (``DTSTART`` is a ``DATE``) use one path: clipped to the grid and
     emitted to ``multiday_spans`` (``start``/``end`` inclusive may be the same day).
@@ -189,7 +208,7 @@ def events_by_day_from_ics(
     """
     cal = Calendar.from_ical(ics_bytes)
     query = of(cal, skip_bad_series=True)
-    visible_dates = visible_dates_for_month_grid(year, month)
+    _, visible_dates = rolling_weeks_and_visible(year, month, today)
     range_start = min(visible_dates)
     range_end_excl = max(visible_dates) + timedelta(days=1)
     components = query.between(range_start, range_end_excl)
