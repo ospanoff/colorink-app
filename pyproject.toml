@@ -28,10 +28,17 @@ dev = [
 requires = ["uv_build>=0.11.3,<0.12.0"]
 build-backend = "uv_build"
 
+# Single package index: PyPI. This table has higher priority than `index-url` and takes
+# precedence for this project; see: https://docs.astral.sh/uv/reference/settings/#index
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+
 [tool.ruff]
 target-version = "py313"
 line-length = 100
 src = ["src"]
+extend-exclude = ["uv.lock"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
