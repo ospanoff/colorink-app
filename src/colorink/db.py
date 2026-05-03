@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from colorink.artifacts import write_generated_pair
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY,
@@ -27,8 +29,6 @@ CREATE TABLE IF NOT EXISTS plugin_global_config (
 CREATE TABLE IF NOT EXISTS generated_images (
     device_id TEXT NOT NULL,
     plugin_slug TEXT NOT NULL,
-    raw_blob BLOB NOT NULL,
-    dithered_blob BLOB NOT NULL,
     generated_at TEXT NOT NULL,
     next_update_at TEXT NOT NULL,
     PRIMARY KEY (device_id, plugin_slug),
@@ -165,29 +165,33 @@ def get_generated_row(
 def upsert_generated(
     conn: sqlite3.Connection,
     *,
+    artifacts_root: Path,
     device_id: str,
     plugin_slug: str,
-    raw_blob: bytes,
-    dithered_blob: bytes,
+    raw_png: bytes,
+    dithered_bmp: bytes,
     generated_at: datetime,
     next_update_at: datetime,
 ) -> None:
+    write_generated_pair(
+        artifacts_root,
+        device_id=device_id,
+        plugin_slug=plugin_slug,
+        raw_png=raw_png,
+        dithered_bmp=dithered_bmp,
+    )
     conn.execute(
         """
         INSERT INTO generated_images (
-            device_id, plugin_slug, raw_blob, dithered_blob, generated_at, next_update_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            device_id, plugin_slug, generated_at, next_update_at
+        ) VALUES (?, ?, ?, ?)
         ON CONFLICT(device_id, plugin_slug) DO UPDATE SET
-            raw_blob = excluded.raw_blob,
-            dithered_blob = excluded.dithered_blob,
             generated_at = excluded.generated_at,
             next_update_at = excluded.next_update_at
         """,
         (
             device_id,
             plugin_slug,
-            raw_blob,
-            dithered_blob,
             iso(generated_at),
             iso(next_update_at),
         ),

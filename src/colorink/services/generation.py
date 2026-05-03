@@ -4,6 +4,7 @@ import logging
 import sqlite3
 import time
 from datetime import timedelta
+from pathlib import Path
 
 from colorink import db
 from colorink.db import DeviceRow, iso, parse_iso, utc_now
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 def run_generation(
     conn: sqlite3.Connection,
     *,
+    artifacts_root: Path,
     device: DeviceRow,
     plugin_slug: str,
     force_update: bool,
@@ -67,10 +69,11 @@ def run_generation(
     next_update_at = generated_at + timedelta(seconds=interval)
     db.upsert_generated(
         conn,
+        artifacts_root=artifacts_root,
         device_id=device.id,
         plugin_slug=plugin_slug,
-        raw_blob=raw_png,
-        dithered_blob=bmp,
+        raw_png=raw_png,
+        dithered_bmp=bmp,
         generated_at=generated_at,
         next_update_at=next_update_at,
     )
@@ -84,7 +87,7 @@ def run_generation(
     logger.info(
         f"generation_timing plugin={plugin_slug} device={device.id} "
         f"size={device.width}x{device.height} fetch_ms={fetch_ms:.2f} render_ms={render_ms:.2f} "
-        f"dither_ms={dither_ms:.2f} db_ms={db_ms:.2f} total_ms={total_ms:.2f}"
+        f"dither_ms={dither_ms:.2f} persist_ms={db_ms:.2f} total_ms={total_ms:.2f}"
     )
 
     return True, {

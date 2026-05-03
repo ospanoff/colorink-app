@@ -3,13 +3,15 @@ from __future__ import annotations
 import sqlite3
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from colorink import db
+from colorink.artifacts import dithered_bmp_path, raw_png_path
+from colorink.config import Settings
 from colorink.db import DeviceRow
-from colorink.deps import get_connection, require_device
+from colorink.deps import get_connection, get_settings, require_device
 from colorink.plugins.registry import all_plugins, get_plugin
 from colorink.services.generation import run_generation
 from colorink.services.plugin_config import (
@@ -88,6 +90,7 @@ def list_plugins(conn: Annotated[sqlite3.Connection, Depends(get_connection)]) -
 def generate_plugin_image(
     plugin_slug: str,
     conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+    settings: Annotated[Settings, Depends(get_settings)],
     device: Annotated[DeviceRow, Depends(require_device)],
     body: Annotated[GenerateBody | None, Body()] = None,
 ) -> JSONResponse:
@@ -96,6 +99,7 @@ def generate_plugin_image(
     force = (body or GenerateBody()).force_update
     new, payload = run_generation(
         conn,
+        artifacts_root=settings.artifacts_path,
         device=device,
         plugin_slug=plugin_slug,
         force_update=force,
@@ -109,25 +113,33 @@ def generate_plugin_image(
 def get_dithered_image(
     plugin_slug: str,
     conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+    settings: Annotated[Settings, Depends(get_settings)],
     device: Annotated[DeviceRow, Depends(require_device)],
-) -> Response:
+) -> FileResponse:
     if get_plugin(plugin_slug) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown plugin")
     row = db.get_generated_row(conn, device.id, plugin_slug)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No image generated yet")
-    return Response(content=row["dithered_blob"], media_type="image/bmp")
+    path = dithered_bmp_path(settings.artifacts_path, device.id, plugin_slug)
+    if not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No image generated yet")
+    return FileResponse(path, media_type="image/bmp")
 
 
 @router.get("/{plugin_slug}/raw-image")
 def get_raw_image(
     plugin_slug: str,
     conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+    settings: Annotated[Settings, Depends(get_settings)],
     device: Annotated[DeviceRow, Depends(require_device)],
-) -> Response:
+) -> FileResponse:
     if get_plugin(plugin_slug) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown plugin")
     row = db.get_generated_row(conn, device.id, plugin_slug)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No image generated yet")
-    return Response(content=row["raw_blob"], media_type="image/png")
+    path = raw_png_path(settings.artifacts_path, device.id, plugin_slug)
+    if not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No image generated yet")
+    return FileResponse(path, media_type="image/png")
