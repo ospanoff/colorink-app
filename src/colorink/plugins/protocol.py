@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from epaper_dithering import ColorScheme
+from PIL import Image
 
 from colorink.plugins.config import PluginBaseConfig
 
@@ -20,7 +21,11 @@ class DeviceContext:
 
 @runtime_checkable
 class ImagePlugin(Protocol):
-    """Plugin contract: fetch data, render PNG bytes, expose defaults and slug."""
+    """Plugin contract: fetch data, render a Pillow RGB image, expose defaults and slug.
+
+    :meth:`render_raw` must return a freshly constructed image sized for ``device``.
+    The generation service closes it after encoding PNG and dithering to BMP.
+    """
 
     slug: str
     title: str
@@ -40,4 +45,4 @@ class ImagePlugin(Protocol):
         data: Any,
         device: DeviceContext,
         plugin_config: dict[str, Any],
-    ) -> bytes: ...
+    ) -> Image.Image: ...

@@ -59,5 +59,6 @@ uv run granian --interface asgi colorink.main:app --host 127.0.0.1 --port 8000 -
 | Environment variable     | Meaning                                                                                           |
 | ------------------------ | ------------------------------------------------------------------------------------------------- |
 | `COLORINK_DATABASE_PATH` | SQLite database file path (default: `data/colorink.db` relative to the process working directory) |
+| `COLORINK_ARTIFACTS_PATH` | Directory for generated PNG/BMP files (default: `data/generated`)                               |
 
 The `data/` directory is created automatically when the app first opens the database.

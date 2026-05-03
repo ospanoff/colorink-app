@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import calendar
-import io
 from datetime import date
 from typing import Any
 
@@ -499,19 +498,13 @@ def _draw_ics_error_banner(
     draw.text((fonts.pad, grid_top + 8), wrapped, fill=_ERROR_TEXT, font=msg_font)
 
 
-def _png_bytes(img: Image.Image) -> bytes:
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def render_month_png(
+def render_month_image(
     *,
     width: int,
     height: int,
     data: dict[str, Any],
-) -> bytes:
-    """Render ``data`` from :meth:`CalendarPlugin.fetch_data` to PNG bytes."""
+) -> Image.Image:
+    """Raster month view suitable for Pillow + dithering (no PNG round-trip)."""
     year = int(data["year"])
     month = int(data["month"])
     ok = bool(data.get("ok"))
@@ -544,7 +537,7 @@ def render_month_png(
 
     if not ok:
         _draw_ics_error_banner(draw, width=width, grid_top=fonts.pad, message=err, fonts=fonts)
-        return _png_bytes(img)
+        return img
 
     bar_h = _multiday_lane_height_px(fonts)
     bar_gap = 0
@@ -609,4 +602,4 @@ def render_month_png(
             _draw_one_week(week, y)
             y += row_h
 
-    return _png_bytes(img)
+    return img

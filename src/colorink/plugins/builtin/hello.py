@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 from typing import Any
 
 from epaper_dithering import DitherMode
@@ -69,7 +68,7 @@ def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 
 class HelloPlugin(ImagePlugin):
-    """Minimal PNG plugin: draws text on a white canvas (no browser)."""
+    """Minimal demo plugin: draws RGB text on a white canvas."""
 
     slug = "hello"
     title = "Hello"
@@ -96,7 +95,7 @@ class HelloPlugin(ImagePlugin):
         data: dict[str, str],
         device: DeviceContext,
         plugin_config: dict[str, Any],
-    ) -> bytes:
+    ) -> Image.Image:
         _ = plugin_config
         w, h = device.width, device.height
         large_px, small_px, gap_px = _font_sizes_for_screen(w, h)
@@ -117,6 +116,4 @@ class HelloPlugin(ImagePlugin):
         draw.text(((w - tw1) // 2, y), text1, fill=(0, 0, 0), font=font_large)
         draw.text(((w - tw2) // 2, y + th1 + gap_px), text2, fill=(80, 80, 80), font=font_small)
 
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        return buf.getvalue()
+        return img

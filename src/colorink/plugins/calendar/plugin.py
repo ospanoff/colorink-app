@@ -8,10 +8,11 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from epaper_dithering import DitherMode
+from PIL import Image
 
 from colorink.plugins.calendar.config import CalendarPluginConfig
 from colorink.plugins.calendar.ics import events_by_day_from_ics, host_for_label
-from colorink.plugins.calendar.render import render_month_png
+from colorink.plugins.calendar.render import render_month_image
 from colorink.plugins.protocol import DeviceContext, ImagePlugin
 
 _PLACEHOLDER_URL = "https://example.com/calendar.ics"
@@ -125,6 +126,6 @@ class CalendarPlugin(ImagePlugin):
         data: dict[str, Any],
         device: DeviceContext,
         plugin_config: dict[str, Any],
-    ) -> bytes:
+    ) -> Image.Image:
         _ = plugin_config
-        return render_month_png(width=device.width, height=device.height, data=data)
+        return render_month_image(width=device.width, height=device.height, data=data)

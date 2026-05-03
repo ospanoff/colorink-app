@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from icalendar import Calendar
 from recurring_ical_events import of
 
-# Matches :class:`calendar.Calendar` usage in ``render_month_png`` (Monday-first weeks).
+# Matches :class:`calendar.Calendar` usage in ``render_month_image`` (Monday-first weeks).
 _FIRST_WEEKDAY = calendar.MONDAY
 
 
