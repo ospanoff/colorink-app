@@ -1,0 +1,36 @@
+# Templated unit: the instance name (%i) is the Unix login that owns colorink-app.
+# Paths use /home/%i/colorink-app (standard “user home under /home/<name>” layout).
+# Avoids %h, which can resolve incorrectly for template instances on some setups.
+#
+# Example: sync as that user, then (from their shell so $USER is correct):
+#   cd ~/colorink-app && uv sync
+#   sudo cp deploy/systemd/colorink@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now "colorink@${USER}.service"
+#
+# If enable used $USER while logged in as root, you get colorink@root — wrong for a normal app user.
+# Fix: SSH as the app user, then sudo systemctl enable --now "colorink@${USER}.service"
+#
+# Logs: sudo journalctl -u "colorink@${USER}.service" -f
+#
+# If $HOME is not /home/<login> (LDAP, etc.), copy this unit and set WorkingDirectory + ExecStart by hand.
+#
+# Listens on 0.0.0.0:8000 (LAN). Restrict with host firewall and/or bind --host 127.0.0.1 behind a reverse proxy.
+
+[Unit]
+Description=Colorink e-paper plugin API (Granian) (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=/home/%i/colorink-app
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/%i/colorink-app/.venv/bin/granian --interface asgi colorink.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
