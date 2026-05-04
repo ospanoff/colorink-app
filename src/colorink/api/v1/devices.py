@@ -10,6 +10,7 @@ from colorink import db
 from colorink.db import DeviceRow
 from colorink.deps import get_connection
 from colorink.epaper_str_enums import ColorSchemeName, color_scheme_name_from_stored
+from colorink.plugins.registry import get_plugin
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
@@ -28,6 +29,7 @@ class DeviceOut(BaseModel):
     height: int
     color_scheme: ColorSchemeName
     created_at: str
+    registered_plugin_slug: str | None = None
 
     @classmethod
     def from_row(cls, row: DeviceRow) -> DeviceOut:
@@ -38,7 +40,14 @@ class DeviceOut(BaseModel):
             height=row.height,
             color_scheme=color_scheme_name_from_stored(row.color_scheme),
             created_at=row.created_at,
+            registered_plugin_slug=row.registered_plugin_slug,
         )
+
+
+class RegisteredPluginBody(BaseModel):
+    """Set ``plugin_slug`` to a known plugin id, or omit / null to clear the registration."""
+
+    plugin_slug: str | None = None
 
 
 @router.get("/color-schemes", response_model=list[str])
@@ -81,3 +90,21 @@ def get_device_by_id(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
     return DeviceOut.from_row(row)
+
+
+@router.put("/{device_id}/registered-plugin", response_model=DeviceOut)
+def put_device_registered_plugin(
+    device_id: str,
+    body: RegisteredPluginBody,
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+) -> DeviceOut:
+    row = db.get_device(conn, device_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
+    slug = body.plugin_slug
+    if slug is not None and get_plugin(slug) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown plugin")
+    db.set_device_registered_plugin(conn, device_id, slug)
+    updated = db.get_device(conn, device_id)
+    assert updated is not None
+    return DeviceOut.from_row(updated)

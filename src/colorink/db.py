@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS devices (
     width INTEGER NOT NULL,
     height INTEGER NOT NULL,
     color_scheme TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    registered_plugin_slug TEXT
 );
 
 CREATE TABLE IF NOT EXISTS plugin_global_config (
@@ -45,8 +46,15 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _ensure_devices_registered_plugin_column(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(devices)").fetchall()}
+    if "registered_plugin_slug" not in cols:
+        conn.execute("ALTER TABLE devices ADD COLUMN registered_plugin_slug TEXT")
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    _ensure_devices_registered_plugin_column(conn)
 
 
 def utc_now() -> datetime:
@@ -71,6 +79,7 @@ class DeviceRow:
     height: int
     color_scheme: str
     created_at: str
+    registered_plugin_slug: str | None
 
 
 def insert_device(
@@ -85,10 +94,12 @@ def insert_device(
     created = iso(utc_now())
     conn.execute(
         """
-        INSERT INTO devices (id, name, width, height, color_scheme, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO devices (
+            id, name, width, height, color_scheme, created_at, registered_plugin_slug
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (device_id, name, width, height, color_scheme, created),
+        (device_id, name, width, height, color_scheme, created, None),
     )
     return device_id
 
@@ -104,6 +115,7 @@ def get_device(conn: sqlite3.Connection, device_id: str) -> DeviceRow | None:
         height=row["height"],
         color_scheme=row["color_scheme"],
         created_at=row["created_at"],
+        registered_plugin_slug=row["registered_plugin_slug"],
     )
 
 
@@ -117,9 +129,19 @@ def list_devices(conn: sqlite3.Connection) -> list[DeviceRow]:
             height=r["height"],
             color_scheme=r["color_scheme"],
             created_at=r["created_at"],
+            registered_plugin_slug=r["registered_plugin_slug"],
         )
         for r in rows
     ]
+
+
+def set_device_registered_plugin(
+    conn: sqlite3.Connection, device_id: str, plugin_slug: str | None
+) -> None:
+    conn.execute(
+        "UPDATE devices SET registered_plugin_slug = ? WHERE id = ?",
+        (plugin_slug, device_id),
+    )
 
 
 def get_plugin_config(conn: sqlite3.Connection, plugin_slug: str) -> dict[str, Any]:

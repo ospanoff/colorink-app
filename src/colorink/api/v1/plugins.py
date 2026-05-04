@@ -12,6 +12,7 @@ from colorink.artifacts import dithered_bmp_path, raw_png_path
 from colorink.config import Settings
 from colorink.db import DeviceRow
 from colorink.deps import get_connection, get_settings, require_device
+from colorink.plugins.builtin.hello import HelloPlugin
 from colorink.plugins.registry import all_plugins, get_plugin
 from colorink.services.generation import run_generation
 from colorink.services.plugin_config import (
@@ -37,6 +38,63 @@ class GenerateBody(BaseModel):
 class GenerateResponse(BaseModel):
     generated_at: str
     next_update_at: str
+
+
+def _plugin_slug_for_registered_device(device: DeviceRow) -> str:
+    slug = device.registered_plugin_slug
+    if not slug:
+        return HelloPlugin.slug
+    if get_plugin(slug) is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="Registered plugin is not available",
+        )
+    return slug
+
+
+# Declared before `/{plugin_slug}/…` so `device` is not captured as a plugin slug.
+@router.post("/device")
+def generate_plugin_image_for_registered_plugin(
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    device: Annotated[DeviceRow, Depends(require_device)],
+    body: Annotated[GenerateBody | None, Body()] = None,
+) -> JSONResponse:
+    return generate_plugin_image(
+        _plugin_slug_for_registered_device(device),
+        conn,
+        settings,
+        device,
+        body,
+    )
+
+
+@router.get("/device/image")
+def get_dithered_image_for_registered_plugin(
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    device: Annotated[DeviceRow, Depends(require_device)],
+) -> FileResponse:
+    return get_dithered_image(
+        _plugin_slug_for_registered_device(device),
+        conn,
+        settings,
+        device,
+    )
+
+
+@router.get("/device/raw-image")
+def get_raw_image_for_registered_plugin(
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    device: Annotated[DeviceRow, Depends(require_device)],
+) -> FileResponse:
+    return get_raw_image(
+        _plugin_slug_for_registered_device(device),
+        conn,
+        settings,
+        device,
+    )
 
 
 @router.get("/{plugin_slug}/config", response_model=dict[str, Any])
@@ -78,7 +136,9 @@ def put_plugin_config(
 
 
 @router.get("", response_model=list[PluginInfo])
-def list_plugins(conn: Annotated[sqlite3.Connection, Depends(get_connection)]) -> list[PluginInfo]:
+def list_plugins(
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+) -> list[PluginInfo]:
     out: list[PluginInfo] = []
     for p in all_plugins():
         cfg = merge_and_validate_plugin_config_from_db(conn, p).model_dump(mode="json")
