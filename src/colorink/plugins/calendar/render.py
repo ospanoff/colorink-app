@@ -43,7 +43,6 @@ from colorink.plugins.calendar.palette import (
     _GRID_LINE,
     _HEADER_TEXT,
     _MONTH_INTER_BLOCK_GAP,
-    _MULTIDAY_BAR_CORNER_RADIUS,
     _MULTIDAY_BG_TOP_INSET,
     _OVERFLOW_CHIP_BG,
     _OVERFLOW_CHIP_BG_PAST,
@@ -79,6 +78,11 @@ def _multiday_strip_y_bounds(y0: float, bar_h: int) -> tuple[float, float]:
     return y_top, y_top + bar_h
 
 
+def _multiday_bar_corner_radius(bar_h: int) -> int:
+    """Corner radius for spanning multiday bars: pill-like caps within stripe height."""
+    return max(5, bar_h // 2)
+
+
 def _draw_multiday_rounded_fill(
     draw: ImageDraw.ImageDraw,
     *,
@@ -92,7 +96,7 @@ def _draw_multiday_rounded_fill(
     y_top, y_bot = _multiday_strip_y_bounds(y0, bar_h)
     draw.rounded_rectangle(
         [x0, y_top, x1, y_bot],
-        radius=_MULTIDAY_BAR_CORNER_RADIUS,
+        radius=_multiday_bar_corner_radius(bar_h),
         fill=fill,
         outline=outline,
         width=1,

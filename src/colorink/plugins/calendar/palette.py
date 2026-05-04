@@ -65,7 +65,7 @@ _MULTIDAY_BAR_OUTLINES_PAST = (
     (204, 204, 204),
 )
 _MULTIDAY_BG_TOP_INSET = 2
-_MULTIDAY_BAR_CORNER_RADIUS = 3
+# Multiday stripe corner radius is derived from ``bar_h`` in ``render`` (pill caps).
 
 # Today: clearly distinct from white (L15) and near-white weekend (L14).
 _TODAY_CELL_BG = (204, 204, 204)  # L12 – 3 steps below white
