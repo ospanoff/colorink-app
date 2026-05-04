@@ -9,22 +9,23 @@ from PIL import ImageDraw, ImageFont
 
 from colorink.plugins.calendar.palette import _EVENT_LINE_STEP_FACTOR
 
-# Bundled Noto Sans (SIL OFL) - same family for regular vs bold; see fonts/OFL.txt
+# Bundled Inter (SIL OFL) — designed by Rasmus Andersson for screen text at all sizes;
+# tight hinting, excellent numeral clarity, strong regular/bold contrast. See fonts/OFL.txt.
 _FONTS_DIR = Path(__file__).resolve().parent / "fonts"
-_NOTO_REGULAR = _FONTS_DIR / "NotoSans-Regular.ttf"
-_NOTO_BOLD = _FONTS_DIR / "NotoSans-Bold.ttf"
+_INTER_REGULAR = _FONTS_DIR / "Inter-Regular.ttf"
+_INTER_BOLD = _FONTS_DIR / "Inter-Bold.ttf"
 
 
 def _calendar_font_regular(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    if not _NOTO_REGULAR.is_file():
-        raise FileNotFoundError(f"Bundled font missing: {_NOTO_REGULAR}")
-    return ImageFont.truetype(str(_NOTO_REGULAR), size)
+    if not _INTER_REGULAR.is_file():
+        raise FileNotFoundError(f"Bundled font missing: {_INTER_REGULAR}")
+    return ImageFont.truetype(str(_INTER_REGULAR), size)
 
 
 def _calendar_font_bold(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    if not _NOTO_BOLD.is_file():
-        raise FileNotFoundError(f"Bundled font missing: {_NOTO_BOLD}")
-    return ImageFont.truetype(str(_NOTO_BOLD), size)
+    if not _INTER_BOLD.is_file():
+        raise FileNotFoundError(f"Bundled font missing: {_INTER_BOLD}")
+    return ImageFont.truetype(str(_INTER_BOLD), size)
 
 
 @dataclass(frozen=True)
@@ -47,12 +48,14 @@ class MonthFonts:
     @classmethod
     def for_canvas(cls, width: int, height: int) -> MonthFonts:
         short = min(width, height)
-        title_px = max(16, min(short // 11, 52))
-        header_px = max(22, min(short // 12, 36))
-        dow_px = max(11, int(title_px * 0.42))
-        daynum_px = max(10, int(title_px * 0.38))
-        event_px = max(12, int(title_px * 0.38))
-        pad = max(6, short // 64)
+        # Caps raised for 10-inch displays (short side typically 1200–1872 px).
+        # Larger glyphs have thicker strokes that survive Floyd-Steinberg dithering.
+        title_px = max(18, min(short // 9, 64))
+        header_px = max(24, min(short // 10, 48))
+        dow_px = max(13, int(title_px * 0.44))
+        daynum_px = max(12, int(title_px * 0.40))
+        event_px = max(14, int(title_px * 0.40))
+        pad = max(8, short // 56)
         return cls(
             pad=pad,
             title_px=title_px,
@@ -62,8 +65,10 @@ class MonthFonts:
             event_px=event_px,
             event_line_step=int(event_px * _EVENT_LINE_STEP_FACTOR),
             header=_calendar_font_bold(header_px),
-            dow=_calendar_font_regular(dow_px),
-            day_number=_calendar_font_regular(daynum_px),
+            # Bold for DOW labels and day numbers: thicker strokes read cleanly
+            # after greyscale dithering and from typical 10-inch viewing distance.
+            dow=_calendar_font_bold(dow_px),
+            day_number=_calendar_font_bold(daynum_px),
             event_regular=_calendar_font_regular(event_px),
             event_bold=_calendar_font_bold(event_px),
         )
