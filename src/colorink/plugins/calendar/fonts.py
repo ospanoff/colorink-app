@@ -96,7 +96,7 @@ def _truncate_to_width(
     return text[:lo] + ell if lo > 0 else ell
 
 
-def _truncate_time_and_title(
+def _truncate_time_and_title_one_line(
     draw: ImageDraw.ImageDraw,
     time_str: str,
     title_str: str,
@@ -104,7 +104,7 @@ def _truncate_time_and_title(
     font_title: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     max_w: int,
 ) -> tuple[str, str]:
-    """Leave time unbold; truncate title to fit after ``time + space``."""
+    """Single-line multiday bar: time + space + truncated bold title within ``max_w``."""
     gap = " "
     w_time = draw.textlength(time_str, font=font_time)
     w_gap = draw.textlength(gap, font=font_time)

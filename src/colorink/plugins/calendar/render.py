@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 from colorink.plugins.calendar.fonts import (
     MonthFonts,
     _calendar_font_regular,
-    _truncate_time_and_title,
+    _truncate_time_and_title_one_line,
     _truncate_to_width,
 )
 from colorink.plugins.calendar.ics import rolling_weeks_and_visible
@@ -19,6 +19,7 @@ from colorink.plugins.calendar.layout import (
     _assign_multiday_lanes,
     _cell_content_top_y,
     _clip_span_to_week,
+    _event_row_slots_for_item,
     _event_row_slots_in_cell,
     _event_time_and_title,
     _events_by_day_from_payload,
@@ -98,24 +99,11 @@ def _draw_multiday_rounded_fill(
     )
 
 
-def _draw_ls_advance(
-    draw: ImageDraw.ImageDraw,
-    x: float,
-    baseline_y: int,
-    text: str,
-    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
-    fill: tuple[int, int, int],
-) -> float:
-    """Draw ``anchor='ls'`` text and return the x position after the glyph run."""
-    draw.text((x, baseline_y), text, fill=fill, font=font, anchor="ls")
-    return x + draw.textlength(text, font=font)
-
-
 def _draw_timed_event_line(
     draw: ImageDraw.ImageDraw,
     *,
     left_x: int,
-    baseline_y: int,
+    line_top: float,
     max_width: int,
     time_text: str,
     title_text: str,
@@ -124,20 +112,26 @@ def _draw_timed_event_line(
 ) -> None:
     fill_time = _EVENT_TIME_PAST if muted else _EVENT_TIME
     fill_title = _EVENT_TITLE_PAST if muted else _EVENT_TITLE
-    t_draw, title_draw = _truncate_time_and_title(
-        draw, time_text, title_text, fonts.event_regular, fonts.event_bold, max_width
+    time_line = _truncate_to_width(draw, time_text, fonts.event_regular, max_width)
+    tab = int(draw.textlength("   ", font=fonts.event_regular))
+    title_budget = max(1, max_width - tab)
+    title_draw = _truncate_to_width(draw, title_text, fonts.event_bold, title_budget)
+    bl1 = _event_row_baseline(line_top, fonts)
+    draw.text(
+        (float(left_x), bl1),
+        time_line,
+        fill=fill_time,
+        font=fonts.event_regular,
+        anchor="ls",
     )
-    x = float(left_x)
-    x = _draw_ls_advance(draw, x, baseline_y, t_draw, fonts.event_regular, fill_time)
-    if title_draw:
-        x = _draw_ls_advance(draw, x, baseline_y, " ", fonts.event_regular, fill_time)
-        draw.text(
-            (x, baseline_y),
-            title_draw,
-            fill=fill_title,
-            font=fonts.event_bold,
-            anchor="ls",
-        )
+    bl2 = _event_row_baseline(line_top + fonts.event_line_step, fonts)
+    draw.text(
+        (float(left_x + tab), bl2),
+        title_draw,
+        fill=fill_title,
+        font=fonts.event_bold,
+        anchor="ls",
+    )
 
 
 def _draw_title_only_event_line(
@@ -218,32 +212,54 @@ def _draw_multiday_bar_label(
     max_inner: int,
     span: dict[str, Any],
     fonts: MonthFonts,
-    baseline_y: int,
+    line_top: float,
     muted: bool,
 ) -> None:
     """Draw multiday text using the same colors and layout as list-event rows."""
     time_part, title_part = _event_time_and_title(span)
     if time_part:
-        _draw_timed_event_line(
+        t_draw, title_draw = _truncate_time_and_title_one_line(
             draw,
-            left_x=inner_left,
-            baseline_y=baseline_y,
-            max_width=max_inner,
-            time_text=time_part,
-            title_text=title_part,
-            fonts=fonts,
-            muted=muted,
+            time_part,
+            title_part,
+            fonts.event_regular,
+            fonts.event_bold,
+            max_inner,
         )
+        bl = _event_row_baseline(line_top, fonts)
+        fill_time = _EVENT_TIME_PAST if muted else _EVENT_TIME
+        fill_title = _EVENT_TITLE_PAST if muted else _EVENT_TITLE
+        gap = " "
+        x = float(inner_left)
+        draw.text((x, bl), t_draw, fill=fill_time, font=fonts.event_regular, anchor="ls")
+        if title_draw:
+            x += draw.textlength(t_draw, font=fonts.event_regular)
+            x += draw.textlength(gap, font=fonts.event_regular)
+            draw.text((x, bl), title_draw, fill=fill_title, font=fonts.event_bold, anchor="ls")
     else:
         _draw_title_only_event_line(
             draw,
             left_x=inner_left,
-            baseline_y=baseline_y,
+            baseline_y=_event_row_baseline(line_top, fonts),
             max_width=max_inner,
             title=title_part,
             fonts=fonts,
             muted=muted,
         )
+
+
+def _events_fit_and_overflow(items: list[Any], max_steps: int) -> tuple[int, bool]:
+    """How many items fit in ``max_steps`` line units; use overflow chip when some are hidden."""
+    if sum(_event_row_slots_for_item(it) for it in items) <= max_steps:
+        return len(items), False
+    cap_with_chip = max(0, max_steps - 1)
+    used = 0
+    for i, item in enumerate(items):
+        need = _event_row_slots_for_item(item)
+        if used + need > cap_with_chip:
+            return i, True
+        used += need
+    return len(items), False
 
 
 def _draw_events_in_cell(
@@ -263,9 +279,7 @@ def _draw_events_in_cell(
     line_top = _cell_content_top_y(cell_top, fonts) + int(reserved_top)
     max_w = int(column_width - 2 * _CELL_INNER_PAD)
     slots = _event_row_slots_in_cell(row_height, fonts, reserved_top)
-    # Overflow chip uses one row; leave that slot empty when trimming the list.
-    overflow = len(items) > slots
-    event_limit = len(items) if not overflow else max(0, slots - 1)
+    event_limit, overflow = _events_fit_and_overflow(items, slots)
 
     for i, item in enumerate(items):
         if i >= event_limit:
@@ -281,31 +295,30 @@ def _draw_events_in_cell(
                 )
             break
 
-        baseline_y = _event_row_baseline(float(line_top), fonts)
         time_part, title_part = _event_time_and_title(item)
         if time_part:
             _draw_timed_event_line(
                 draw,
                 left_x=text_left,
-                baseline_y=baseline_y,
+                line_top=float(line_top),
                 max_width=max_w,
                 time_text=time_part,
                 title_text=title_part,
                 fonts=fonts,
                 muted=muted,
             )
+            line_top += 2 * fonts.event_line_step
         else:
             _draw_title_only_event_line(
                 draw,
                 left_x=text_left,
-                baseline_y=baseline_y,
+                baseline_y=_event_row_baseline(float(line_top), fonts),
                 max_width=max_w,
                 title=title_part,
                 fonts=fonts,
                 muted=muted,
             )
-
-        line_top += fonts.event_line_step
+            line_top += fonts.event_line_step
 
 
 def _draw_multiday_bars_for_week(
@@ -350,14 +363,13 @@ def _draw_multiday_bars_for_week(
         if max_inner <= 0:
             continue
         inner_left = int(x0 + _CELL_INNER_PAD)
-        bl = _event_row_baseline(y0, fonts)
         _draw_multiday_bar_label(
             draw,
             inner_left=inner_left,
             max_inner=max_inner,
             span=m,
             fonts=fonts,
-            baseline_y=bl,
+            line_top=y0,
             muted=is_past_span,
         )
 

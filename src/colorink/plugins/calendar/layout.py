@@ -43,7 +43,11 @@ def _multiday_spans_from_payload(raw: Any) -> list[dict[str, Any]]:
         title = str(item.get("title") or "")
         t = item.get("time")
         time_s = str(t) if t else None
-        out.append({"title": title, "time": time_s, "start": s, "end": e})
+        row: dict[str, Any] = {"title": title, "time": time_s, "start": s, "end": e}
+        et = item.get("end_time")
+        if et:
+            row["end_time"] = str(et)
+        out.append(row)
     return out
 
 
@@ -72,16 +76,28 @@ def _group_weeks_by_week_start_month(
 
 
 def _event_time_and_title(item: Any) -> tuple[str | None, str]:
-    """Time string (or None for all-day / legacy) and title for separate fonts."""
+    """Time line (start or start–end) and title; None time for all-day / legacy."""
     if isinstance(item, str):
         return None, item
     if isinstance(item, dict):
         title = str(item.get("title", ""))
         t = item.get("time")
-        if t:
-            return str(t), title
-        return None, title
+        if not t:
+            return None, title
+        start_s = str(t)
+        end = item.get("end_time")
+        if end:
+            end_s = str(end)
+            if end_s and end_s != start_s:
+                return f"{start_s}–{end_s}", title
+        return start_s, title
     return None, str(item)
+
+
+def _event_row_slots_for_item(item: Any) -> int:
+    """Vertical budget in ``event_line_step`` units (timed rows use two lines)."""
+    time_part, _ = _event_time_and_title(item)
+    return 2 if time_part else 1
 
 
 # --- Multiday lane-packing algorithms --------------------------------------------------------

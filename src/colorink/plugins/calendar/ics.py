@@ -5,7 +5,7 @@ from __future__ import annotations
 import calendar
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
@@ -38,14 +38,16 @@ def rolling_weeks_and_visible(
 
 class IcsEventRow(TypedDict):
     title: str
-    time: str | None  # "HH:MM" in configured timezone, or None for all-day
+    time: str | None  # "HH:MM" start in configured timezone, or None for all-day
+    end_time: NotRequired[str | None]  # "HH:MM" end when same local day as start
 
 
 class MultidaySpanDict(TypedDict):
-    """One all-day span; ``end`` is inclusive (``start`` may equal ``end`` for a single day)."""
+    """Span drawn as a rounded bar; ``end`` is inclusive. All-day uses ``time`` None."""
 
     title: str
     time: str | None
+    end_time: NotRequired[str | None]
     start: str  # ISO date
     end: str  # ISO date, inclusive
 
@@ -56,6 +58,35 @@ def host_for_label(url: str) -> str:
         return host or url
     except ValueError:
         return url
+
+
+def _timed_event_end_time_label(comp, tz: ZoneInfo, raw_start: datetime) -> str | None:
+    """Local wall-clock end time (HH:MM) from DTEND or DTSTART + DURATION, or None."""
+    dtend_prop = comp.get("dtend")
+    if dtend_prop is not None:
+        raw_end = dtend_prop.dt
+        if isinstance(raw_end, datetime):
+            edt = raw_end
+            if edt.tzinfo is None:
+                edt = edt.replace(tzinfo=tz)
+            else:
+                edt = edt.astimezone(tz)
+            return edt.strftime("%H:%M")
+        return None
+
+    duration_prop = comp.get("duration")
+    if duration_prop is None:
+        return None
+    sdt = raw_start
+    if sdt.tzinfo is None:
+        sdt = sdt.replace(tzinfo=tz)
+    else:
+        sdt = sdt.astimezone(tz)
+    dur = duration_prop.dt
+    if not isinstance(dur, timedelta):
+        return None
+    end = sdt + dur
+    return end.astimezone(tz).strftime("%H:%M")
 
 
 def _local_date_and_time_label(
@@ -165,7 +196,46 @@ def _process_all_day_event(
     )
 
 
+def _process_timed_multiday_span(
+    comp,
+    title: str,
+    start_d: date,
+    end_d: date,
+    time_label: str | None,
+    end_lbl: str | None,
+    visible_dates: frozenset[date],
+    seen_multiday: set[tuple[str, str, str]],
+    multiday: list[MultidaySpanDict],
+) -> None:
+    """Clip a multi-day timed instance to the grid and append to ``multiday`` (deduped)."""
+    if not time_label:
+        return
+    clip_start = max(start_d, min(visible_dates))
+    clip_end = min(end_d, max(visible_dates))
+    if clip_start > clip_end:
+        return
+    uid_str = str(comp.get("uid") or "")
+    key = (
+        (uid_str, clip_start.isoformat(), clip_end.isoformat())
+        if uid_str
+        else (title, clip_start.isoformat(), clip_end.isoformat())
+    )
+    if key in seen_multiday:
+        return
+    seen_multiday.add(key)
+    row: MultidaySpanDict = MultidaySpanDict(
+        title=title,
+        time=time_label,
+        start=clip_start.isoformat(),
+        end=clip_end.isoformat(),
+    )
+    if end_lbl is not None:
+        row["end_time"] = end_lbl
+    multiday.append(row)
+
+
 def _process_timed_event(
+    comp,
     raw_start: date | datetime,
     title: str,
     start_d: date,
@@ -173,19 +243,38 @@ def _process_timed_event(
     visible_dates: frozenset[date],
     tz: ZoneInfo,
     by_day: dict[date, list[IcsEventRow]],
+    seen_multiday: set[tuple[str, str, str]],
+    multiday: list[MultidaySpanDict],
 ) -> None:
-    """Add a timed event to ``by_day``: one row per visible local calendar day it spans."""
+    """Single-day timed → ``by_day``; multi-day timed → spanning ``multiday`` bar (not listed)."""
     _, time_label = _local_date_and_time_label(raw_start, tz)
+    end_lbl: str | None = None
+    if isinstance(raw_start, datetime) and time_label is not None:
+        end_lbl = _timed_event_end_time_label(comp, tz, raw_start)
+        if not end_lbl or end_lbl == time_label:
+            end_lbl = None
+
+    def _row() -> IcsEventRow:
+        base: IcsEventRow = {"title": title, "time": time_label}
+        if end_lbl is not None:
+            base["end_time"] = end_lbl
+        return base
+
     if start_d == end_d:
         if start_d in visible_dates:
-            by_day[start_d].append({"title": title, "time": time_label})
+            by_day[start_d].append(_row())
         return
-    # Multi-day timed: one list row per visible day.
-    d = start_d
-    while d <= end_d:
-        if d in visible_dates:
-            by_day[d].append({"title": title, "time": time_label})
-        d += timedelta(days=1)
+    _process_timed_multiday_span(
+        comp,
+        title,
+        start_d,
+        end_d,
+        time_label,
+        end_lbl,
+        visible_dates,
+        seen_multiday,
+        multiday,
+    )
 
 
 def events_by_day_from_ics(
@@ -199,10 +288,11 @@ def events_by_day_from_ics(
     calendar month of ``today`` and that same ``today`` as the anchor (first week = week
     of ``today``).
 
-    **All-day** instances (``DTSTART`` is a ``DATE``) use one path: clipped to the grid and
-    emitted to ``multiday_spans`` (``start``/``end`` inclusive may be the same day).
+    **All-day** instances (``DTSTART`` is a ``DATE``) go to ``multiday`` as ``time=None``.
 
-    **Timed** instances use ``events_by_day`` - once per day if they span multiple local days.
+    **Timed** instances on a single local day go to ``events_by_day``. **Timed** instances
+    that span multiple local days are clipped into ``multiday`` (with ``time`` set) so they
+    render as spanning bars, not repeated list rows.
     """
     year, month = today.year, today.month
     cal = Calendar.from_ical(ics_bytes)
@@ -237,7 +327,18 @@ def events_by_day_from_ics(
                 comp, title, start_d, end_d, visible_dates, seen_multiday, multiday
             )
         else:
-            _process_timed_event(raw_start, title, start_d, end_d, visible_dates, tz, by_day)
+            _process_timed_event(
+                comp,
+                raw_start,
+                title,
+                start_d,
+                end_d,
+                visible_dates,
+                tz,
+                by_day,
+                seen_multiday,
+                multiday,
+            )
 
     out: dict[date, list[IcsEventRow]] = {}
     for d, rows in by_day.items():
