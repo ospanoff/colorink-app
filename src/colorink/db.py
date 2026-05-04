@@ -10,20 +10,31 @@ from typing import Any
 
 from colorink.artifacts import write_generated_pair
 
+
+class DeviceNotFoundError(ValueError):
+    """No row exists for the given device id (e.g. update target missing)."""
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceRow:
+    id: str
+    name: str | None
+    width: int
+    height: int
+    color_scheme: str
+    created_at: str
+    registered_plugin_slug: str | None
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY,
-    name TEXT,
-    width INTEGER NOT NULL,
-    height INTEGER NOT NULL,
-    color_scheme TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    registered_plugin_slug TEXT
+    settings_json TEXT NOT NULL CHECK (json_valid(settings_json))
 );
 
 CREATE TABLE IF NOT EXISTS plugin_global_config (
     plugin_slug TEXT PRIMARY KEY,
-    config_json TEXT NOT NULL,
+    config_json TEXT NOT NULL CHECK (json_valid(config_json)),
     updated_at TEXT NOT NULL
 );
 
@@ -46,15 +57,22 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _ensure_devices_registered_plugin_column(conn: sqlite3.Connection) -> None:
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(devices)").fetchall()}
-    if "registered_plugin_slug" not in cols:
-        conn.execute("ALTER TABLE devices ADD COLUMN registered_plugin_slug TEXT")
+def _device_row_from_sql(row: sqlite3.Row) -> DeviceRow:
+    data: dict[str, Any] = json.loads(row["settings_json"])
+    slug = data.get("registered_plugin_slug")
+    return DeviceRow(
+        id=str(row["id"]),
+        name=data.get("name"),
+        width=data["width"],
+        height=data["height"],
+        color_scheme=data["color_scheme"],
+        created_at=data["created_at"],
+        registered_plugin_slug=slug if slug else None,
+    )
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
-    _ensure_devices_registered_plugin_column(conn)
 
 
 def utc_now() -> datetime:
@@ -71,17 +89,6 @@ def parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
 
-@dataclass(frozen=True, slots=True)
-class DeviceRow:
-    id: str
-    name: str | None
-    width: int
-    height: int
-    color_scheme: str
-    created_at: str
-    registered_plugin_slug: str | None
-
-
 def insert_device(
     conn: sqlite3.Connection,
     *,
@@ -92,55 +99,53 @@ def insert_device(
 ) -> str:
     device_id = str(uuid.uuid4())
     created = iso(utc_now())
+    settings: dict[str, Any] = {
+        "name": name,
+        "width": width,
+        "height": height,
+        "color_scheme": color_scheme,
+        "created_at": created,
+    }
     conn.execute(
-        """
-        INSERT INTO devices (
-            id, name, width, height, color_scheme, created_at, registered_plugin_slug
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (device_id, name, width, height, color_scheme, created, None),
+        "INSERT INTO devices (id, settings_json) VALUES (?, ?)",
+        (device_id, json.dumps(settings)),
     )
     return device_id
 
 
 def get_device(conn: sqlite3.Connection, device_id: str) -> DeviceRow | None:
-    row = conn.execute("SELECT * FROM devices WHERE id = ?", (device_id,)).fetchone()
+    row = conn.execute(
+        "SELECT id, settings_json FROM devices WHERE id = ?", (device_id,)
+    ).fetchone()
     if row is None:
         return None
-    return DeviceRow(
-        id=row["id"],
-        name=row["name"],
-        width=row["width"],
-        height=row["height"],
-        color_scheme=row["color_scheme"],
-        created_at=row["created_at"],
-        registered_plugin_slug=row["registered_plugin_slug"],
-    )
+    return _device_row_from_sql(row)
 
 
 def list_devices(conn: sqlite3.Connection) -> list[DeviceRow]:
-    rows = conn.execute("SELECT * FROM devices ORDER BY created_at").fetchall()
-    return [
-        DeviceRow(
-            id=r["id"],
-            name=r["name"],
-            width=r["width"],
-            height=r["height"],
-            color_scheme=r["color_scheme"],
-            created_at=r["created_at"],
-            registered_plugin_slug=r["registered_plugin_slug"],
-        )
-        for r in rows
-    ]
+    rows = conn.execute(
+        """
+        SELECT id, settings_json FROM devices
+        ORDER BY json_extract(settings_json, '$.created_at')
+        """
+    ).fetchall()
+    return [_device_row_from_sql(r) for r in rows]
 
 
 def set_device_registered_plugin(
     conn: sqlite3.Connection, device_id: str, plugin_slug: str | None
 ) -> None:
+    row = conn.execute("SELECT settings_json FROM devices WHERE id = ?", (device_id,)).fetchone()
+    if row is None:
+        raise DeviceNotFoundError(f"No device with id {device_id!r}")
+    data: dict[str, Any] = json.loads(row["settings_json"])
+    if plugin_slug is None:
+        data.pop("registered_plugin_slug", None)
+    else:
+        data["registered_plugin_slug"] = plugin_slug
     conn.execute(
-        "UPDATE devices SET registered_plugin_slug = ? WHERE id = ?",
-        (plugin_slug, device_id),
+        "UPDATE devices SET settings_json = ? WHERE id = ?",
+        (json.dumps(data), device_id),
     )
 
 

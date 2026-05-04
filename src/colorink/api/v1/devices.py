@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from colorink import db
-from colorink.db import DeviceRow
+from colorink.db import DeviceNotFoundError, DeviceRow
 from colorink.deps import get_connection
 from colorink.epaper_str_enums import ColorSchemeName, color_scheme_name_from_stored
 from colorink.plugins.registry import get_plugin
@@ -98,13 +98,16 @@ def put_device_registered_plugin(
     body: RegisteredPluginBody,
     conn: Annotated[sqlite3.Connection, Depends(get_connection)],
 ) -> DeviceOut:
-    row = db.get_device(conn, device_id)
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
     slug = body.plugin_slug
     if slug is not None and get_plugin(slug) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown plugin")
-    db.set_device_registered_plugin(conn, device_id, slug)
+    try:
+        db.set_device_registered_plugin(conn, device_id, slug)
+    except DeviceNotFoundError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="Device not found",
+        ) from None
     updated = db.get_device(conn, device_id)
     assert updated is not None
     return DeviceOut.from_row(updated)
