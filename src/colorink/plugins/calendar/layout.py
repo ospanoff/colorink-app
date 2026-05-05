@@ -78,7 +78,7 @@ def _group_weeks_by_week_start_month(
 def _event_time_and_title(item: Any) -> tuple[str | None, str]:
     """Time line (start or start–end) and title; None time for all-day / legacy."""
     if isinstance(item, str):
-        return None, item
+        return None, str(item)
     if isinstance(item, dict):
         title = str(item.get("title", ""))
         t = item.get("time")

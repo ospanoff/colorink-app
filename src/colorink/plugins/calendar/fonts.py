@@ -1,19 +1,189 @@
-"""Font loading, the MonthFonts dataclass, and text-measurement helpers."""
+"""Font loading, the MonthFonts dataclass, and Inter + bitmap-emoji text layout."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
-from PIL import ImageDraw, ImageFont
+import regex
+from PIL import Image, ImageDraw, ImageFont
 
 from colorink.plugins.calendar.palette import _EVENT_LINE_STEP_FACTOR
 
-# Bundled Inter (SIL OFL) — designed by Rasmus Andersson for screen text at all sizes;
-# tight hinting, excellent numeral clarity, strong regular/bold contrast. See fonts/OFL.txt.
+# Emoji bitmap height vs Inter “M” line box (bumped slightly for e-paper readability).
+_EMOJI_HEIGHT_VS_TEXT = 1.20
+
+# Inter for Latin; bundled Noto bitmap emoji (CBDT). COLRv1 often does not rasterize in Pillow.
 _FONTS_DIR = Path(__file__).resolve().parent / "fonts"
 _INTER_REGULAR = _FONTS_DIR / "Inter-Regular.ttf"
 _INTER_BOLD = _FONTS_DIR / "Inter-Bold.ttf"
+_NOTO_COLOR_BITMAP = _FONTS_DIR / "NotoColorEmoji.ttf"
+
+_PIC = regex.compile(r"\p{Extended_Pictographic}", regex.VERSION1)
+
+
+def _is_emoji(grapheme: str) -> bool:
+    return _PIC.search(grapheme) is not None
+
+
+@cache
+def _bitmap_emoji_native_pem() -> int | None:
+    if not _NOTO_COLOR_BITMAP.is_file():
+        return None
+    path = str(_NOTO_COLOR_BITMAP)
+    for px in range(8, 256):
+        try:
+            font = ImageFont.truetype(path, px)
+        except OSError:
+            continue
+        try:
+            if font.getmask("🙂").size[1] > 0:
+                return px
+        except (OSError, TypeError, ValueError, AttributeError):
+            continue
+    return None
+
+
+@cache
+def _emoji_font() -> ImageFont.FreeTypeFont | None:
+    pem = _bitmap_emoji_native_pem()
+    if pem is None:
+        return None
+    try:
+        return ImageFont.truetype(str(_NOTO_COLOR_BITMAP), pem)
+    except OSError:
+        return None
+
+
+def _text_line_height(
+    draw: ImageDraw.ImageDraw,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    anchor: str,
+) -> int:
+    bb = draw.textbbox((0, 0), "M", font=font, anchor=anchor)
+    return max(1, int(bb[3] - bb[1]))
+
+
+def _raster_emoji(grapheme: str, *, target_h: int) -> tuple[int, Image.Image]:
+    face = _emoji_font()
+    if face is None or target_h < 1:
+        return 0, Image.new("RGBA", (0, 0), (0, 0, 0, 0))
+    scratch = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+    dr = ImageDraw.Draw(scratch)
+    dr.text((0, 0), grapheme, font=face, anchor="lt", embedded_color=True)
+    bb = scratch.getbbox()
+    if not bb:
+        return 0, Image.new("RGBA", (0, 0), (0, 0, 0, 0))
+    crop = scratch.crop(bb)
+    w0, h0 = crop.size
+    if h0 <= 0:
+        return 0, Image.new("RGBA", (0, 0), (0, 0, 0, 0))
+    th = max(1, target_h)
+    tw = max(1, int(round(w0 * th / h0)))
+    resized = crop.resize((tw, th), Image.Resampling.LANCZOS)
+    return tw, resized
+
+
+def _graphemes(text: str) -> list[str]:
+    return regex.findall(r"\X", text, regex.VERSION1)
+
+
+def _each_glyph(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    *,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    anchor: str,
+):
+    """Walk user-perceived characters: text uses ``font``, emoji uses bundled bitmap (if any)."""
+    emoji_face = _emoji_font()
+    line_h = _text_line_height(draw, font, anchor)
+    emoji_h = max(1, int(round(line_h * _EMOJI_HEIGHT_VS_TEXT)))
+    for g in _graphemes(text):
+        if emoji_face is not None and _is_emoji(g):
+            tw, rgba = _raster_emoji(g, target_h=emoji_h)
+            yield ("emoji", tw, rgba)
+        else:
+            yield ("text", g)
+
+
+def line_width(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    *,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    anchor: str = "ls",
+) -> float:
+    """Pixel width: Inter for text, scaled bitmap for emoji."""
+    w = 0.0
+    for part in _each_glyph(draw, text, font=font, anchor=anchor):
+        if part[0] == "emoji":
+            w += float(part[1])
+        else:
+            w += float(draw.textlength(part[1], font=font))
+    return w
+
+
+def truncate_line(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    *,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    max_w: int,
+    anchor: str = "ls",
+) -> str:
+    """Truncate on grapheme boundaries to ``max_w``; ellipsis in ``font``."""
+    ell, ell_w = "...", float(draw.textlength("...", font=font))
+    if max_w <= 0:
+        return ""
+    if line_width(draw, text, font=font, anchor=anchor) <= max_w:
+        return text
+    if ell_w > max_w:
+        return ""
+    clusters = _graphemes(text)
+    lo, hi = 0, len(clusters)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        candidate = "".join(clusters[:mid]) + ell
+        if line_width(draw, candidate, font=font, anchor=anchor) <= max_w:
+            lo = mid
+        else:
+            hi = mid - 1
+    if lo == 0:
+        return ell if line_width(draw, ell, font=font, anchor=anchor) <= max_w else ""
+    return "".join(clusters[:lo]) + ell
+
+
+def draw_line(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[float, float],
+    text: str,
+    *,
+    image: Image.Image,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    fill: tuple[int, int, int],
+    anchor: str = "ls",
+) -> None:
+    """Draw a line: ``font`` for text, bitmap emoji pasted when bundled Noto is available.
+
+    ``image`` must be the ``Image.Image`` used to build ``draw``.
+    """
+    x0, y0 = xy
+    x = float(x0)
+    for part in _each_glyph(draw, text, font=font, anchor=anchor):
+        if part[0] == "emoji":
+            tw, rgba = part[1], part[2]
+            if tw > 0 and rgba.height > 0:
+                bb = draw.textbbox((x, y0), "M", font=font, anchor=anchor)
+                mid_y = (bb[1] + bb[3]) / 2.0
+                paste_y = int(mid_y - rgba.height / 2.0)
+                image.paste(rgba, (int(x), paste_y), rgba)
+            x += float(tw)
+        else:
+            g = part[1]
+            draw.text((x, y0), g, font=font, fill=fill, anchor=anchor)
+            x += float(draw.textlength(g, font=font))
 
 
 def _calendar_font_regular(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -48,8 +218,6 @@ class MonthFonts:
     @classmethod
     def for_canvas(cls, width: int, height: int) -> MonthFonts:
         short = min(width, height)
-        # Caps raised for 10-inch displays (short side typically 1200–1872 px).
-        # Larger glyphs have thicker strokes that survive Floyd-Steinberg dithering.
         title_px = max(18, min(short // 9, 64))
         header_px = max(24, min(short // 10, 48))
         dow_px = max(13, int(title_px * 0.44))
@@ -65,52 +233,8 @@ class MonthFonts:
             event_px=event_px,
             event_line_step=int(event_px * _EVENT_LINE_STEP_FACTOR),
             header=_calendar_font_bold(header_px),
-            # Bold for DOW labels and day numbers: thicker strokes read cleanly
-            # after greyscale dithering and from typical 10-inch viewing distance.
             dow=_calendar_font_bold(dow_px),
             day_number=_calendar_font_bold(daynum_px),
             event_regular=_calendar_font_regular(event_px),
             event_bold=_calendar_font_bold(event_px),
         )
-
-
-def _truncate_to_width(
-    draw: ImageDraw.ImageDraw,
-    text: str,
-    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
-    max_w: int,
-) -> str:
-    if max_w <= 0:
-        return ""
-    if draw.textlength(text, font=font) <= max_w:
-        return text
-    ell = "..."
-    lo, hi = 0, len(text)
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        candidate = text[:mid] + ell
-        if draw.textlength(candidate, font=font) <= max_w:
-            lo = mid
-        else:
-            hi = mid - 1
-    return text[:lo] + ell if lo > 0 else ell
-
-
-def _truncate_time_and_title_one_line(
-    draw: ImageDraw.ImageDraw,
-    time_str: str,
-    title_str: str,
-    font_time: ImageFont.FreeTypeFont | ImageFont.ImageFont,
-    font_title: ImageFont.FreeTypeFont | ImageFont.ImageFont,
-    max_w: int,
-) -> tuple[str, str]:
-    """Single-line multiday bar: time + space + truncated bold title within ``max_w``."""
-    gap = " "
-    w_time = draw.textlength(time_str, font=font_time)
-    w_gap = draw.textlength(gap, font=font_time)
-    if w_time >= max_w:
-        return _truncate_to_width(draw, time_str, font_time, max_w), ""
-    budget = max_w - w_time - w_gap
-    if budget <= 0:
-        return time_str, ""
-    return time_str, _truncate_to_width(draw, title_str, font_title, int(budget))

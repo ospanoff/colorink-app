@@ -11,8 +11,9 @@ from PIL import Image, ImageDraw, ImageFont
 from colorink.plugins.calendar.fonts import (
     MonthFonts,
     _calendar_font_regular,
-    _truncate_time_and_title_one_line,
-    _truncate_to_width,
+    draw_line,
+    line_width,
+    truncate_line,
 )
 from colorink.plugins.calendar.ics import rolling_weeks_and_visible
 from colorink.plugins.calendar.layout import (
@@ -83,6 +84,26 @@ def _multiday_bar_corner_radius(bar_h: int) -> int:
     return max(5, bar_h // 2)
 
 
+def _truncate_multiday_time_title(
+    draw: ImageDraw.ImageDraw,
+    time_str: str,
+    title_str: str,
+    font_time: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    font_title: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    max_w: int,
+) -> tuple[str, str]:
+    """Timed multiday label: time + space + truncated bold title within ``max_w``."""
+    gap = " "
+    w_time = line_width(draw, time_str, font=font_time)
+    w_gap = line_width(draw, gap, font=font_time)
+    if w_time >= max_w:
+        return truncate_line(draw, time_str, font=font_time, max_w=max_w), ""
+    budget = max_w - int(w_time + w_gap)
+    if budget <= 0:
+        return time_str, ""
+    return time_str, truncate_line(draw, title_str, font=font_title, max_w=budget)
+
+
 def _draw_multiday_rounded_fill(
     draw: ImageDraw.ImageDraw,
     *,
@@ -106,6 +127,7 @@ def _draw_multiday_rounded_fill(
 def _draw_timed_event_line(
     draw: ImageDraw.ImageDraw,
     *,
+    img: Image.Image,
     left_x: int,
     line_top: float,
     max_width: int,
@@ -116,24 +138,38 @@ def _draw_timed_event_line(
 ) -> None:
     fill_time = _EVENT_TIME_PAST if muted else _EVENT_TIME
     fill_title = _EVENT_TITLE_PAST if muted else _EVENT_TITLE
-    time_line = _truncate_to_width(draw, time_text, fonts.event_regular, max_width)
-    tab = int(draw.textlength("   ", font=fonts.event_regular))
+    time_line = truncate_line(
+        draw,
+        time_text,
+        font=fonts.event_regular,
+        max_w=max_width,
+    )
+    tab = int(line_width(draw, "   ", font=fonts.event_regular))
     title_budget = max(1, max_width - tab)
-    title_draw = _truncate_to_width(draw, title_text, fonts.event_bold, title_budget)
+    title_draw = truncate_line(
+        draw,
+        title_text,
+        font=fonts.event_bold,
+        max_w=title_budget,
+    )
     bl1 = _event_row_baseline(line_top, fonts)
-    draw.text(
+    draw_line(
+        draw,
         (float(left_x), bl1),
         time_line,
-        fill=fill_time,
+        image=img,
         font=fonts.event_regular,
+        fill=fill_time,
         anchor="ls",
     )
     bl2 = _event_row_baseline(line_top + fonts.event_line_step, fonts)
-    draw.text(
+    draw_line(
+        draw,
         (float(left_x + tab), bl2),
         title_draw,
-        fill=fill_title,
+        image=img,
         font=fonts.event_bold,
+        fill=fill_title,
         anchor="ls",
     )
 
@@ -141,6 +177,7 @@ def _draw_timed_event_line(
 def _draw_title_only_event_line(
     draw: ImageDraw.ImageDraw,
     *,
+    img: Image.Image,
     left_x: int,
     baseline_y: int,
     max_width: int,
@@ -149,8 +186,21 @@ def _draw_title_only_event_line(
     muted: bool = False,
 ) -> None:
     fill_title = _EVENT_TITLE_PAST if muted else _EVENT_TITLE
-    line = _truncate_to_width(draw, title, fonts.event_bold, max_width)
-    draw.text((left_x, baseline_y), line, fill=fill_title, font=fonts.event_bold, anchor="ls")
+    line = truncate_line(
+        draw,
+        title,
+        font=fonts.event_bold,
+        max_w=max_width,
+    )
+    draw_line(
+        draw,
+        (left_x, baseline_y),
+        line,
+        image=img,
+        font=fonts.event_bold,
+        fill=fill_title,
+        anchor="ls",
+    )
 
 
 def _overflow_chip_label(hidden_count: int) -> str:
@@ -163,6 +213,7 @@ def _overflow_chip_label(hidden_count: int) -> str:
 def _draw_overflow_chip(
     draw: ImageDraw.ImageDraw,
     *,
+    img: Image.Image,
     left_x: float,
     line_top: float,
     max_width: int,
@@ -175,8 +226,15 @@ def _draw_overflow_chip(
     pad_h = max(3, fonts.event_px // 5)
     pad_v = max(1, fonts.event_px // 8)
     inner_text_max = max(1, max_width - 2 * pad_h)
-    label = _truncate_to_width(draw, _overflow_chip_label(hidden_count), font, inner_text_max)
-    tw = float(draw.textlength(label, font=font))
+    raw = _overflow_chip_label(hidden_count)
+    label0 = truncate_line(
+        draw,
+        raw,
+        font=font,
+        max_w=inner_text_max,
+        anchor="lm",
+    )
+    tw = float(line_width(draw, label0, font=font, anchor="lm"))
     line_h = float(fonts.event_line_step)
     if isinstance(font, ImageFont.FreeTypeFont):
         ascent, descent = font.getmetrics()
@@ -200,11 +258,21 @@ def _draw_overflow_chip(
         outline=outline,
         width=1,
     )
-    draw.text(
-        (x0 + float(pad_h), cy),
-        _truncate_to_width(draw, label, font, max(1, cw - 2)),
-        fill=text_fill,
+    inner_draw_max = max(1, int(cw - 2 * pad_h))
+    label = truncate_line(
+        draw,
+        label0,
         font=font,
+        max_w=inner_draw_max,
+        anchor="lm",
+    )
+    draw_line(
+        draw,
+        (x0 + float(pad_h), cy),
+        label,
+        image=img,
+        font=font,
+        fill=text_fill,
         anchor="lm",
     )
 
@@ -212,6 +280,7 @@ def _draw_overflow_chip(
 def _draw_multiday_bar_label(
     draw: ImageDraw.ImageDraw,
     *,
+    img: Image.Image,
     inner_left: int,
     max_inner: int,
     span: dict[str, Any],
@@ -222,7 +291,7 @@ def _draw_multiday_bar_label(
     """Draw multiday text using the same colors and layout as list-event rows."""
     time_part, title_part = _event_time_and_title(span)
     if time_part:
-        t_draw, title_draw = _truncate_time_and_title_one_line(
+        t_draw, title_draw = _truncate_multiday_time_title(
             draw,
             time_part,
             title_part,
@@ -235,14 +304,31 @@ def _draw_multiday_bar_label(
         fill_title = _EVENT_TITLE_PAST if muted else _EVENT_TITLE
         gap = " "
         x = float(inner_left)
-        draw.text((x, bl), t_draw, fill=fill_time, font=fonts.event_regular, anchor="ls")
+        draw_line(
+            draw,
+            (x, bl),
+            t_draw,
+            image=img,
+            font=fonts.event_regular,
+            fill=fill_time,
+            anchor="ls",
+        )
         if title_draw:
-            x += draw.textlength(t_draw, font=fonts.event_regular)
-            x += draw.textlength(gap, font=fonts.event_regular)
-            draw.text((x, bl), title_draw, fill=fill_title, font=fonts.event_bold, anchor="ls")
+            x += line_width(draw, t_draw, font=fonts.event_regular)
+            x += line_width(draw, gap, font=fonts.event_regular)
+            draw_line(
+                draw,
+                (x, bl),
+                title_draw,
+                image=img,
+                font=fonts.event_bold,
+                fill=fill_title,
+                anchor="ls",
+            )
     else:
         _draw_title_only_event_line(
             draw,
+            img=img,
             left_x=inner_left,
             baseline_y=_event_row_baseline(line_top, fonts),
             max_width=max_inner,
@@ -269,6 +355,7 @@ def _events_fit_and_overflow(items: list[Any], max_steps: int) -> tuple[int, boo
 def _draw_events_in_cell(
     draw: ImageDraw.ImageDraw,
     *,
+    img: Image.Image,
     cell_left: float,
     cell_top: float,
     column_width: float,
@@ -290,6 +377,7 @@ def _draw_events_in_cell(
             if overflow:
                 _draw_overflow_chip(
                     draw,
+                    img=img,
                     left_x=float(text_left),
                     line_top=float(line_top),
                     max_width=max_w,
@@ -303,6 +391,7 @@ def _draw_events_in_cell(
         if time_part:
             _draw_timed_event_line(
                 draw,
+                img=img,
                 left_x=text_left,
                 line_top=float(line_top),
                 max_width=max_w,
@@ -315,6 +404,7 @@ def _draw_events_in_cell(
         else:
             _draw_title_only_event_line(
                 draw,
+                img=img,
                 left_x=text_left,
                 baseline_y=_event_row_baseline(float(line_top), fonts),
                 max_width=max_w,
@@ -328,6 +418,7 @@ def _draw_events_in_cell(
 def _draw_multiday_bars_for_week(
     draw: ImageDraw.ImageDraw,
     *,
+    img: Image.Image,
     week: tuple[date, ...],
     cell_top: float,
     pad: int,
@@ -369,6 +460,7 @@ def _draw_multiday_bars_for_week(
         inner_left = int(x0 + _CELL_INNER_PAD)
         _draw_multiday_bar_label(
             draw,
+            img=img,
             inner_left=inner_left,
             max_inner=max_inner,
             span=m,
@@ -440,6 +532,7 @@ def _draw_day_cell_chrome(
 def _draw_day_cell_events(
     draw: ImageDraw.ImageDraw,
     *,
+    img: Image.Image,
     cell_left: float,
     cell_top: float,
     col_w: float,
@@ -458,6 +551,7 @@ def _draw_day_cell_events(
 
     _draw_events_in_cell(
         draw,
+        img=img,
         cell_left=cell_left,
         cell_top=cell_top,
         column_width=col_w,
@@ -503,15 +597,31 @@ def _draw_month_block_header(
 def _draw_ics_error_banner(
     draw: ImageDraw.ImageDraw,
     *,
+    img: Image.Image,
     width: int,
     grid_top: float,
     message: str,
     fonts: MonthFonts,
 ) -> None:
-    msg_font = _calendar_font_regular(max(12, fonts.title_px // 2))
+    msg_px = max(12, fonts.title_px // 2)
+    msg_font = _calendar_font_regular(msg_px)
     text = message or "Could not load calendar."
-    wrapped = _truncate_to_width(draw, text, msg_font, width - 2 * fonts.pad)
-    draw.text((fonts.pad, grid_top + 8), wrapped, fill=_ERROR_TEXT, font=msg_font)
+    wrapped = truncate_line(
+        draw,
+        text,
+        font=msg_font,
+        max_w=width - 2 * fonts.pad,
+        anchor="lt",
+    )
+    draw_line(
+        draw,
+        (fonts.pad, grid_top + 8),
+        wrapped,
+        image=img,
+        font=msg_font,
+        fill=_ERROR_TEXT,
+        anchor="lt",
+    )
 
 
 def render_month_image(
@@ -552,7 +662,9 @@ def render_month_image(
     row_h = (grid_h - block_overhead) / float(n_weeks) if n_weeks else grid_h
 
     if not ok:
-        _draw_ics_error_banner(draw, width=width, grid_top=fonts.pad, message=err, fonts=fonts)
+        _draw_ics_error_banner(
+            draw, img=img, width=width, grid_top=fonts.pad, message=err, fonts=fonts
+        )
         return img
 
     bar_h = _multiday_lane_height_px(fonts)
@@ -577,6 +689,7 @@ def render_month_image(
             )
         reserved = _draw_multiday_bars_for_week(
             draw,
+            img=img,
             week=wk,
             cell_top=y0,
             pad=p,
@@ -591,6 +704,7 @@ def render_month_image(
             cl = p + day_index * col_w
             _draw_day_cell_events(
                 draw,
+                img=img,
                 cell_left=cl,
                 cell_top=y0,
                 col_w=col_w,
