@@ -4,19 +4,20 @@ repos:
       # Fixed commands on src/; always_run avoids skip when nothing is git-tracked yet.
       - id: ruff-check
         name: ruff check
-        entry: uv run ruff check src
+        # --frozen: do not rewrite uv.lock (e.g. alternate index URLs in CI / corp mirrors).
+        entry: uv run --frozen ruff check src
         language: system
         pass_filenames: false
         always_run: true
       - id: ruff-format
         name: ruff format
-        entry: uv run ruff format src
+        entry: uv run --frozen ruff format src
         language: system
         pass_filenames: false
         always_run: true
       - id: ty
         name: ty
-        entry: uv run ty check src
+        entry: uv run --frozen ty check src
         language: system
         pass_filenames: false
         always_run: true
