@@ -42,28 +42,9 @@ _OVERFLOW_CHIP_OUTLINE = (153, 153, 153)  # L9  – active border
 _OVERFLOW_CHIP_OUTLINE_PAST = (204, 204, 204)  # L12 – past border
 _OVERFLOW_CHIP_RADIUS = 4
 
-# Multiday bar fills/outlines – three distinct grey levels so stacked lanes are
-# distinguishable even without colour.  Past bars all use a single light grey.
-_MULTIDAY_BAR_FILLS = (
-    (204, 204, 204),  # L12 – lane 0
-    (221, 221, 221),  # L13 – lane 1
-    (187, 187, 187),  # L11 – lane 2
-)
-_MULTIDAY_BAR_FILLS_PAST = (
-    (238, 238, 238),  # L14 – all past lanes
-    (238, 238, 238),
-    (238, 238, 238),
-)
-_MULTIDAY_BAR_OUTLINES = (
-    (119, 119, 119),  # L7  – lane 0 border
-    (136, 136, 136),  # L8  – lane 1 border
-    (102, 102, 102),  # L6  – lane 2 border
-)
-_MULTIDAY_BAR_OUTLINES_PAST = (
-    (204, 204, 204),  # L12 – all past lane borders
-    (204, 204, 204),
-    (204, 204, 204),
-)
+# Multiday bars: one style for every lane (no alternating greys).
+_MULTIDAY_BAR_FILL = (238, 238, 238)  # L14 – super light grey interior
+_MULTIDAY_BAR_OUTLINE = (0, 0, 0)  # L0 – black border
 _MULTIDAY_BG_TOP_INSET = 2
 # Multiday stripe corner radius is derived from ``bar_h`` in ``render`` (pill caps).
 
@@ -92,10 +73,7 @@ _MONTH_INTER_BLOCK_GAP = 10
 
 
 def _multiday_bar_palette(
-    lane: int, is_past: bool
+    _lane: int, _is_past: bool
 ) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-    """Bar fill and outline for a multiday lane (cycles three grey levels)."""
-    i = lane % len(_MULTIDAY_BAR_FILLS)
-    if is_past:
-        return _MULTIDAY_BAR_FILLS_PAST[i], _MULTIDAY_BAR_OUTLINES_PAST[i]
-    return _MULTIDAY_BAR_FILLS[i], _MULTIDAY_BAR_OUTLINES[i]
+    """Bar fill and outline for a multiday stripe (lane and past flags ignored for colour)."""
+    return _MULTIDAY_BAR_FILL, _MULTIDAY_BAR_OUTLINE
