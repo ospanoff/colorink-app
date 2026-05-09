@@ -6,10 +6,14 @@ from typing import cast
 
 from colorink.plugins.builtin.hello import HelloPlugin
 from colorink.plugins.calendar import CalendarPlugin
+from colorink.plugins.photoframe import PhotoFramePlugin
 from colorink.plugins.protocol import ImagePlugin
 from colorink.services.plugin_config import merge_and_validate_plugin_config
 
-PLUGINS: list[ImagePlugin] = cast(list[ImagePlugin], [HelloPlugin(), CalendarPlugin()])
+PLUGINS: list[ImagePlugin] = cast(
+    list[ImagePlugin],
+    [HelloPlugin(), CalendarPlugin(), PhotoFramePlugin()],
+)
 
 for _plugin in PLUGINS:
     merge_and_validate_plugin_config(_plugin, {})

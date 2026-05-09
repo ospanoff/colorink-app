@@ -46,6 +46,15 @@ CREATE TABLE IF NOT EXISTS generated_images (
     PRIMARY KEY (device_id, plugin_slug),
     FOREIGN KEY (device_id) REFERENCES devices(id)
 );
+
+CREATE TABLE IF NOT EXISTS plugin_device_state (
+    plugin_slug TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    state_json TEXT NOT NULL CHECK (json_valid(state_json)),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (plugin_slug, device_id),
+    FOREIGN KEY (device_id) REFERENCES devices(id)
+);
 """
 
 
@@ -157,6 +166,40 @@ def get_plugin_config(conn: sqlite3.Connection, plugin_slug: str) -> dict[str, A
     if row is None:
         return {}
     return json.loads(row["config_json"])
+
+
+def get_plugin_device_state(
+    conn: sqlite3.Connection, plugin_slug: str, device_id: str
+) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT state_json FROM plugin_device_state
+        WHERE plugin_slug = ? AND device_id = ?
+        """,
+        (plugin_slug, device_id),
+    ).fetchone()
+    if row is None:
+        return {}
+    return json.loads(row["state_json"])
+
+
+def upsert_plugin_device_state(
+    conn: sqlite3.Connection,
+    plugin_slug: str,
+    device_id: str,
+    state: dict[str, Any],
+) -> None:
+    now = iso(utc_now())
+    conn.execute(
+        """
+        INSERT INTO plugin_device_state (plugin_slug, device_id, state_json, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(plugin_slug, device_id) DO UPDATE SET
+            state_json = excluded.state_json,
+            updated_at = excluded.updated_at
+        """,
+        (plugin_slug, device_id, json.dumps(state), now),
+    )
 
 
 def upsert_plugin_config(

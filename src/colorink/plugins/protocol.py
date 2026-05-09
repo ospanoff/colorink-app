@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -38,7 +39,12 @@ class ImagePlugin(Protocol):
         """Must validate against :meth:`config_model`."""
         ...
 
-    def fetch_data(self, plugin_config: dict[str, Any], device: DeviceContext) -> Any: ...
+    def fetch_data(
+        self,
+        plugin_config: dict[str, Any],
+        device: DeviceContext,
+        conn: sqlite3.Connection,
+    ) -> Any: ...
 
     def render_raw(
         self,

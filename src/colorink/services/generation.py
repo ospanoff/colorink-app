@@ -54,7 +54,7 @@ def run_generation(
         color_scheme=lib_scheme,
     )
     t0 = time.perf_counter()
-    data = plugin.fetch_data(cfg_raw, ctx)
+    data = plugin.fetch_data(cfg_raw, ctx, conn)
     t1 = time.perf_counter()
     img = plugin.render_raw(data, ctx, cfg_raw)
     try:

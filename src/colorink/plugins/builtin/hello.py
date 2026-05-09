@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 from epaper_dithering import DitherMode
@@ -84,7 +85,13 @@ class HelloPlugin(ImagePlugin):
             "dither_mode": DitherMode.FLOYD_STEINBERG,
         }
 
-    def fetch_data(self, plugin_config: dict[str, Any], device: DeviceContext) -> dict[str, str]:
+    def fetch_data(
+        self,
+        plugin_config: dict[str, Any],
+        device: DeviceContext,
+        conn: sqlite3.Connection,
+    ) -> dict[str, str]:
+        _ = conn, device
         return {
             "line1": str(plugin_config.get("line1", "Hello")),
             "line2": str(plugin_config.get("line2", "e-paper")),

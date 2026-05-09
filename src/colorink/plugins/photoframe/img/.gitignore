@@ -1,0 +1,4 @@
+# User-supplied images (keep this directory in git via .gitkeep only)
+*
+!.gitignore
+!.gitkeep

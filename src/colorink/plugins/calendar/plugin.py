@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -70,8 +71,13 @@ class CalendarPlugin(ImagePlugin):
             "dither_mode": DitherMode.FLOYD_STEINBERG,
         }
 
-    def fetch_data(self, plugin_config: dict[str, Any], device: DeviceContext) -> dict[str, Any]:
-        _ = device
+    def fetch_data(
+        self,
+        plugin_config: dict[str, Any],
+        device: DeviceContext,
+        conn: sqlite3.Connection,
+    ) -> dict[str, Any]:
+        _ = conn, device
         tz = ZoneInfo(str(plugin_config.get("timezone") or "UTC"))
         today_d = _today_from_config(plugin_config, tz)
         today_iso = today_d.isoformat()
