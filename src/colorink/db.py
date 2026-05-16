@@ -26,6 +26,14 @@ class DeviceRow:
     registered_plugin_slug: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class DeviceLogRow:
+    id: int
+    device_id: str
+    received_at: str
+    payload: str
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY,
@@ -55,6 +63,17 @@ CREATE TABLE IF NOT EXISTS plugin_device_state (
     PRIMARY KEY (plugin_slug, device_id),
     FOREIGN KEY (device_id) REFERENCES devices(id)
 );
+
+CREATE TABLE IF NOT EXISTS device_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    FOREIGN KEY (device_id) REFERENCES devices(id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_device_logs_device_received_at
+ON device_logs (device_id, received_at DESC);
 """
 
 
@@ -230,6 +249,55 @@ def get_generated_row(
         """,
         (device_id, plugin_slug),
     ).fetchone()
+
+
+def insert_device_log(
+    conn: sqlite3.Connection,
+    *,
+    device_id: str,
+    payload: str,
+) -> int:
+    rid = iso(utc_now())
+    cur = conn.execute(
+        """
+        INSERT INTO device_logs (device_id, received_at, payload)
+        VALUES (?, ?, ?)
+        """,
+        (device_id, rid, payload),
+    )
+    rowid = cur.lastrowid
+    if rowid is None:
+        raise RuntimeError("device_logs insert did not set lastrowid")
+    return int(rowid)
+
+
+def list_device_logs(
+    conn: sqlite3.Connection,
+    *,
+    device_id: str,
+    limit: int = 200,
+) -> list[DeviceLogRow]:
+    if limit < 1 or limit > 2000:
+        raise ValueError("limit must be in 1…2000")
+    rows = conn.execute(
+        """
+        SELECT id, device_id, received_at, payload
+        FROM device_logs
+        WHERE device_id = ?
+        ORDER BY received_at DESC, id DESC
+        LIMIT ?
+        """,
+        (device_id, limit),
+    ).fetchall()
+    return [
+        DeviceLogRow(
+            id=int(r["id"]),
+            device_id=str(r["device_id"]),
+            received_at=str(r["received_at"]),
+            payload=str(r["payload"]),
+        )
+        for r in rows
+    ]
 
 
 def upsert_generated(

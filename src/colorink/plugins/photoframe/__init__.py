@@ -1,6 +1,7 @@
 """Photoframe plugin: images from on-disk ``photoframe/img``.
 
-Put ``.jpg``, ``.png``, ``.webp``, ``.bmp``, or ``.gif`` files directly in that folder (flat layout).
+Put ``.jpg``, ``.png``, ``.webp``, ``.bmp``, or ``.gif`` files directly in that folder
+(flat layout).
 
 On **each generation** for a device (when new artwork is produced, not skipped for being
 within ``refresh_interval_seconds``), this plugin selects the **next** file in alphabetical

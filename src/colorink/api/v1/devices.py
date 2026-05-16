@@ -3,12 +3,12 @@ from __future__ import annotations
 import sqlite3
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 
 from colorink import db
-from colorink.db import DeviceNotFoundError, DeviceRow
-from colorink.deps import get_connection
+from colorink.db import DeviceLogRow, DeviceNotFoundError, DeviceRow
+from colorink.deps import get_connection, require_device
 from colorink.epaper_str_enums import ColorSchemeName, color_scheme_name_from_stored
 from colorink.plugins.registry import get_plugin
 
@@ -50,6 +50,24 @@ class RegisteredPluginBody(BaseModel):
     plugin_slug: str | None = None
 
 
+class DeviceLogOut(BaseModel):
+    """Returned from ``GET …/devices/{id}/logs`` (matches ``post`` ingestion field ``log``)."""
+
+    id: int
+    received_at: str
+    log: str
+
+    @classmethod
+    def from_row(cls, row: DeviceLogRow) -> DeviceLogOut:
+        return cls(id=row.id, received_at=row.received_at, log=row.payload)
+
+
+class DeviceLogIn(BaseModel):
+    """Stored verbatim as SQLite ``payload``; request JSON field ``log``."""
+
+    log: str = Field(min_length=1, max_length=65536)
+
+
 @router.get("/color-schemes", response_model=list[str])
 def list_color_schemes() -> list[str]:
     """Allowed string values for ``color_scheme`` (API enum ``ColorSchemeName``)."""
@@ -79,6 +97,33 @@ def list_devices(
 ) -> list[DeviceOut]:
     rows = db.list_devices(conn)
     return [DeviceOut.from_row(r) for r in rows]
+
+
+@router.post("/logs", status_code=status.HTTP_201_CREATED)
+def ingest_device_log(
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+    device: Annotated[DeviceRow, Depends(require_device)],
+    body: DeviceLogIn,
+) -> Response:
+    db.insert_device_log(
+        conn,
+        device_id=device.id,
+        payload=body.log,
+    )
+    return Response(status_code=status.HTTP_201_CREATED)
+
+
+@router.get("/{device_id}/logs", response_model=list[DeviceLogOut])
+def list_device_logs(
+    device_id: str,
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+) -> list[DeviceLogOut]:
+    row = db.get_device(conn, device_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found")
+    logs = db.list_device_logs(conn, device_id=device_id, limit=limit)
+    return [DeviceLogOut.from_row(r) for r in logs]
 
 
 @router.get("/{device_id}", response_model=DeviceOut)
