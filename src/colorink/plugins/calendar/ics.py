@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import calendar
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import NotRequired, TypedDict
@@ -12,24 +11,19 @@ from zoneinfo import ZoneInfo
 from icalendar import Calendar
 from recurring_ical_events import of
 
-# Matches :class:`calendar.Calendar` usage in ``render_month_image`` (Monday-first weeks).
-_FIRST_WEEKDAY = calendar.MONDAY
+_ROLLING_WEEKS = 4
 
 
 def rolling_weeks_and_visible(
-    year: int, month: int, today: date
+    today: date,
 ) -> tuple[list[tuple[date, ...]], frozenset[date]]:
-    """Mon-first weeks: first row is the week that contains ``today``, for the given view month.
+    """Mon-first weeks: first row is the week that contains ``today``, for four weeks total.
 
-    ``year``/``month`` fix the visible month (row count from
-    :meth:`calendar.Calendar.monthdatescalendar`). ``today`` picks the first week row: the
-    week that contains this calendar date (its Monday starts row 0).
+    The Monday of ``today``'s week starts row 0; three more full weeks follow.
     """
-    cal = calendar.Calendar(firstweekday=_FIRST_WEEKDAY)
-    n_weeks = len(cal.monthdatescalendar(year, month))
     monday0 = today - timedelta(days=today.weekday())
     weeks: list[tuple[date, ...]] = []
-    for i in range(n_weeks):
+    for i in range(_ROLLING_WEEKS):
         w0 = monday0 + timedelta(days=7 * i)
         weeks.append(tuple(w0 + timedelta(days=d) for d in range(7)))
     visible = frozenset(d for w in weeks for d in w)
@@ -284,9 +278,8 @@ def events_by_day_from_ics(
 ) -> tuple[dict[date, list[IcsEventRow]], list[MultidaySpanDict]]:
     """Map local dates to events for the **visible rolling grid** (Mon-Sun weeks).
 
-    Row count and visible dates come from :func:`rolling_weeks_and_visible` using the
-    calendar month of ``today`` and that same ``today`` as the anchor (first week = week
-    of ``today``).
+    Visible dates come from :func:`rolling_weeks_and_visible`: four Mon-Sun weeks starting
+    with the week that contains ``today``.
 
     **All-day** instances (``DTSTART`` is a ``DATE``) go to ``multiday`` as ``time=None``.
 
@@ -294,10 +287,9 @@ def events_by_day_from_ics(
     that span multiple local days are clipped into ``multiday`` (with ``time`` set) so they
     render as spanning bars, not repeated list rows.
     """
-    year, month = today.year, today.month
     cal = Calendar.from_ical(ics_bytes)
     query = of(cal, skip_bad_series=True)
-    _, visible_dates = rolling_weeks_and_visible(year, month, today)
+    _, visible_dates = rolling_weeks_and_visible(today)
     range_start = min(visible_dates)
     range_end_excl = max(visible_dates) + timedelta(days=1)
     components = query.between(range_start, range_end_excl)

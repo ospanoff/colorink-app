@@ -631,7 +631,6 @@ def render_month_image(
     data: dict[str, Any],
 ) -> Image.Image:
     """Raster month view suitable for Pillow + dithering (no PNG round-trip)."""
-    year = int(data["year"])
     month = int(data["month"])
     ok = bool(data.get("ok"))
     err = str(data.get("error", ""))
@@ -651,7 +650,7 @@ def render_month_image(
     fonts = MonthFonts.for_canvas(width, height)
     col_w = (width - 2.0 * fonts.pad) / 7.0
 
-    weeks, _ = rolling_weeks_and_visible(year, month, today)
+    weeks, _ = rolling_weeks_and_visible(today)
     n_weeks = len(weeks)
     month_blocks = _group_weeks_by_week_start_month(weeks)
     n_blocks = len(month_blocks)
