@@ -34,7 +34,6 @@ from colorink.plugins.calendar.palette import (
     _CELL_INNER_PAD,
     _DAY_IN_MONTH,
     _DAY_NUMBER_TOP_PAD,
-    _DAY_OTHER_MONTH,
     _ERROR_TEXT,
     _EVENT_TIME,
     _EVENT_TIME_PAST,
@@ -53,7 +52,6 @@ from colorink.plugins.calendar.palette import (
     _OVERFLOW_MORE,
     _OVERFLOW_PAST,
     _TODAY_CELL_BG,
-    _TODAY_DAY_NUMBER,
     _TODAY_OUTLINE,
     _WEEKDAY_CELL_BG,
     _WEEKEND_CELL_BG,
@@ -485,7 +483,6 @@ def _draw_day_cell_chrome(
     row_h: float,
     day_index: int,
     d: date,
-    focused_month: int,
     fonts: MonthFonts,
     today: date,
 ) -> None:
@@ -516,15 +513,10 @@ def _draw_day_cell_chrome(
             width=2,
         )
 
-    if is_today:
-        day_color = _TODAY_DAY_NUMBER
-    else:
-        day_color = _DAY_IN_MONTH if d.month == focused_month else _DAY_OTHER_MONTH
-
     draw.text(
         (cell_left + _CELL_INNER_PAD, cell_top + _DAY_NUMBER_TOP_PAD),
         str(d.day),
-        fill=day_color,
+        fill=_DAY_IN_MONTH,
         font=fonts.day_number,
     )
 
@@ -631,7 +623,6 @@ def render_month_image(
     data: dict[str, Any],
 ) -> Image.Image:
     """Raster month view suitable for Pillow + dithering (no PNG round-trip)."""
-    month = int(data["month"])
     ok = bool(data.get("ok"))
     err = str(data.get("error", ""))
     events_by_day = _events_by_day_from_payload(data.get("events_by_day"))
@@ -682,7 +673,6 @@ def render_month_image(
                 row_h=row_h,
                 day_index=day_index,
                 d=d,
-                focused_month=month,
                 fonts=fonts,
                 today=today,
             )

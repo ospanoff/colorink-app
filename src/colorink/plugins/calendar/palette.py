@@ -17,8 +17,7 @@ from __future__ import annotations
 
 _HEADER_TEXT = (17, 17, 17)  # L1  – month-section headings
 _WEEKDAY_LABEL = (68, 68, 68)  # L4  – Mon–Sun header labels
-_DAY_IN_MONTH = (17, 17, 17)  # L1  – day-of-month digit in current month
-_DAY_OTHER_MONTH = (187, 187, 187)  # L11 – clearly faded overflow days
+_DAY_IN_MONTH = (17, 17, 17)  # L1  – day-of-month digit
 # Slightly darker than the original ~220 so grid lines survive Floyd-Steinberg.
 # If lines are still invisible on your device, set dither_mode = NONE.
 _GRID_LINE = (170, 170, 170)  # L10 – cell borders
@@ -51,7 +50,6 @@ _MULTIDAY_BG_TOP_INSET = 2
 # Today: clearly distinct from white (L15) and near-white weekend (L14).
 _TODAY_CELL_BG = (204, 204, 204)  # L12 – 3 steps below white
 _TODAY_OUTLINE = (51, 51, 51)  # L3  – strong border
-_TODAY_DAY_NUMBER = (0, 0, 0)  # L0  – black for maximum contrast
 
 # --- Layout constants -----------------------------------------------------------------------
 
