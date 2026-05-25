@@ -11,15 +11,17 @@ from zoneinfo import ZoneInfo
 from icalendar import Calendar
 from recurring_ical_events import of
 
-_ROLLING_WEEKS = 4
+# Number of consecutive Mon-Sun weeks shown in the rolling grid.
+_ROLLING_WEEKS = 3
 
 
 def rolling_weeks_and_visible(
     today: date,
 ) -> tuple[list[tuple[date, ...]], frozenset[date]]:
-    """Mon-first weeks: first row is the week that contains ``today``, for four weeks total.
+    """Mon-first weeks: first row is the week that contains ``today``.
 
-    The Monday of ``today``'s week starts row 0; three more full weeks follow.
+    Returns ``_ROLLING_WEEKS`` consecutive Mon-Sun weeks; row 0 starts on the Monday of
+    ``today``'s week.
     """
     monday0 = today - timedelta(days=today.weekday())
     weeks: list[tuple[date, ...]] = []
@@ -240,7 +242,7 @@ def _process_timed_event(
     seen_multiday: set[tuple[str, str, str]],
     multiday: list[MultidaySpanDict],
 ) -> None:
-    """Single-day timed → ``by_day``; multi-day timed → spanning ``multiday`` bar (not listed)."""
+    """Single-day timed -> ``by_day``; multi-day timed -> spanning ``multiday`` bar (not listed)."""
     _, time_label = _local_date_and_time_label(raw_start, tz)
     end_lbl: str | None = None
     if isinstance(raw_start, datetime) and time_label is not None:
@@ -278,8 +280,8 @@ def events_by_day_from_ics(
 ) -> tuple[dict[date, list[IcsEventRow]], list[MultidaySpanDict]]:
     """Map local dates to events for the **visible rolling grid** (Mon-Sun weeks).
 
-    Visible dates come from :func:`rolling_weeks_and_visible`: four Mon-Sun weeks starting
-    with the week that contains ``today``.
+    Visible dates come from :func:`rolling_weeks_and_visible`: consecutive Mon-Sun weeks
+    starting with the week that contains ``today`` (count set by ``_ROLLING_WEEKS``).
 
     **All-day** instances (``DTSTART`` is a ``DATE``) go to ``multiday`` as ``time=None``.
 
