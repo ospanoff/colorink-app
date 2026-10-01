@@ -232,7 +232,7 @@ class MonthFonts:
     def for_canvas(cls, width: int, height: int) -> MonthFonts:
         """Sizes for a two-week hour grid: modest day numbers, compact all-day bars.
 
-        Timed events use a separate face sized to the half-hour slot at draw time.
+        Timed events use a separate face sized from the hour row at draw time.
         """
         short = min(width, height)
         pad = max(10, short // 80)

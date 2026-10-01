@@ -54,6 +54,7 @@ from colorink.plugins.calendar.palette import (
     _MONTH_TAG_PAST,
     _NOW_DOT_RADIUS,
     _NOW_RULE,
+    _SNAP_MINUTES,
     _TIMED_BLOCK_ACCENT,
     _TIMED_BLOCK_ACCENT_PAST,
     _TIMED_BLOCK_ACCENT_WIDTH,
@@ -311,13 +312,28 @@ def _event_span_minutes(item: Any) -> tuple[int, int] | None:
     return start, end
 
 
-def _snap_half_hour(start: int, end: int) -> tuple[int, int]:
-    """Floor the start and ceil the end onto a 30-minute grid. At least 30 minutes."""
-    snapped_start = (start // 30) * 30
-    snapped_end = ((end + 29) // 30) * 30
+def _grid_y(top: float, minutes: float, hour_h: float) -> int:
+    """Pixel row for ``minutes`` past ``top``.
+
+    Hour lines, event edges, and the now line all go through here. A 1px rule
+    and a rounded card rasterize a fractional row differently, which leaves a
+    hairline gap under an event that starts on the hour.
+    """
+    return round(top + minutes / 60.0 * hour_h)
+
+
+def _nearest_snap(minutes: int) -> int:
+    """Closest ``_SNAP_MINUTES`` boundary. A halfway minute rounds later."""
+    return ((minutes + _SNAP_MINUTES // 2) // _SNAP_MINUTES) * _SNAP_MINUTES
+
+
+def _snap_span(start: int, end: int) -> tuple[int, int]:
+    """Snap a timed event onto ``_SNAP_MINUTES``. At least one step long."""
+    snapped_start = min(_nearest_snap(start), 24 * 60 - _SNAP_MINUTES)
+    snapped_end = min(_nearest_snap(end), 24 * 60)
     if snapped_end <= snapped_start:
-        snapped_end = snapped_start + 30
-    return snapped_start, min(snapped_end, 24 * 60)
+        snapped_end = snapped_start + _SNAP_MINUTES
+    return snapped_start, snapped_end
 
 
 def _hour_window(
@@ -337,7 +353,7 @@ def _hour_window(
         for item in items:
             raw = _event_span_minutes(item)
             if raw is not None:
-                spans.append(_snap_half_hour(*raw))
+                spans.append(_snap_span(*raw))
     if not spans:
         return None
     start_min = min(start for start, _end in spans)
@@ -433,9 +449,9 @@ def _allday_band_rows(
     return rows
 
 
-def _event_font_px(half_h: float) -> int:
-    """Largest bold title whose glyphs fit a half-hour card (descenders may use the padding)."""
-    inner = half_h - 4.0
+def _event_font_px(slot_h: float) -> int:
+    """Largest bold title that fits in ``slot_h`` (descenders may use the padding)."""
+    inner = slot_h - 4.0
     for px in range(20, 12, -1):
         if _line_box(_calendar_font_bold(px)) * _TITLE_FIT <= inner:
             return px
@@ -455,24 +471,6 @@ def _clock_minutes(raw_now: Any) -> int:
     return local.hour * 60 + local.minute
 
 
-def _half_hour_slot(minutes: int) -> tuple[int, int]:
-    """``[start, end)`` minutes for the 30-minute block that contains ``minutes``."""
-    start = (minutes // 30) * 30
-    return start, min(24 * 60, start + 30)
-
-
-def _window_including_slot(
-    window: tuple[int, int] | None,
-    slot: tuple[int, int],
-) -> tuple[int, int]:
-    """Grow an hour window so the current half-hour is on the grid."""
-    start_min, end_min = slot
-    grown = _hours_covering(start_min, end_min)
-    if window is None:
-        return grown
-    return min(window[0], grown[0]), max(window[1], grown[1])
-
-
 def _now_line(
     *,
     week: tuple[date, ...],
@@ -483,25 +481,23 @@ def _now_line(
     y0: float,
     origin: float,
     col_w: float,
-    now_slot: tuple[int, int],
-) -> tuple[float, float, float] | None:
-    """``(left, right, y)`` of the current half-hour on today's column, or None."""
+    now_minutes: int,
+) -> tuple[float, float, int] | None:
+    """``(left, right, y)`` of the now line on today's column, or None when this week has no scale.
+
+    The mark is the closest ``_SNAP_MINUTES`` boundary inside the week's existing hour window.
+    A clock time outside that window sits on the nearer edge and does not change the scale.
+    """
     if window is None or hour_h <= 0 or today not in week:
         return None
-    start, end = now_slot
     grid_start = window[0] * 60
     grid_end = window[1] * 60
-    if end <= grid_start or start >= grid_end:
-        return None
+    mark = min(max(_nearest_snap(now_minutes), grid_start), grid_end)
     day_index = week.index(today)
     left = origin + day_index * col_w
     right = origin + (day_index + 1) * col_w
-    hour_top = y0 + hour_origin
-    y_start = hour_top + (max(start, grid_start) - grid_start) / 60.0 * hour_h
-    y_end = hour_top + (min(end, grid_end) - grid_start) / 60.0 * hour_h
-    if y_end - y_start < 1:
-        return None
-    return left, right, y_start
+    y = _grid_y(y0 + hour_origin, mark - grid_start, hour_h)
+    return left, right, y
 
 
 def _text_height(
@@ -615,7 +611,7 @@ def render_month_image(
             today = date.today()
     else:
         today = date.today()
-    now_slot = _half_hour_slot(_clock_minutes(data.get("now")))
+    now_minutes = _clock_minutes(data.get("now"))
 
     img = Image.new("RGB", (width, height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
@@ -649,8 +645,6 @@ def render_month_image(
     def _scale_for_week(week: tuple[date, ...]) -> tuple[tuple[int, int] | None, float, float, int]:
         """Hour window, top of the grid, row height, and hour count for this week."""
         window = _hour_window(events_by_day, set(week))
-        if today in week:
-            window = _window_including_slot(window, now_slot)
         band_rows = _allday_band_rows(week, multiday_spans, events_by_day)
         hour_origin = header_h + band_rows * (bar_h + _BAR_GAP)
         n_hours = (window[1] - window[0]) if window else 0
@@ -707,7 +701,7 @@ def render_month_image(
         if window and hour_h > 0:
             hour_top = y0 + hour_origin
             for step in range(n_hours):
-                line_y = hour_top + step * hour_h
+                line_y = _grid_y(hour_top, step * 60, hour_h)
                 draw.rectangle([origin, line_y, width - pad, line_y], fill=_HOUR_LINE)
                 draw.text(
                     (origin - 6, line_y),
@@ -725,7 +719,7 @@ def render_month_image(
             y0=y0,
             origin=origin,
             col_w=col_w,
-            now_slot=now_slot,
+            now_minutes=now_minutes,
         )
         reserved = _draw_bars_for_week(
             draw,
@@ -774,7 +768,7 @@ def render_month_image(
             if not window or hour_h <= 0:
                 continue
             raw_spans = [
-                (*_snap_half_hour(*raw), item)
+                (*_snap_span(*raw), item)
                 for item in events_by_day.get(day, [])
                 if (raw := _event_span_minutes(item)) is not None
             ]
@@ -786,16 +780,16 @@ def render_month_image(
             lane_w = (col_w - 4.0) / lane_count
             cell_bottom = y0 + row_h - 1
             for start, end, item, lane in placed:
-                y_start = hour_top + (start - grid_start) / 60.0 * hour_h
-                y_end = hour_top + (end - grid_start) / 60.0 * hour_h
+                y_start = _grid_y(hour_top, start - grid_start, hour_h)
+                y_end = _grid_y(hour_top, end - grid_start, hour_h)
                 _draw_timed_block(
                     draw,
                     img=img,
                     box=(
                         left + 2 + lane * lane_w + 1,
-                        y_start + 1,
+                        y_start,
                         left + 2 + (lane + 1) * lane_w - 1,
-                        min(y_end - 1, cell_bottom),
+                        min(y_end, cell_bottom),
                     ),
                     item=item,
                     font_regular=block_regular,
@@ -803,12 +797,12 @@ def render_month_image(
                     muted=muted,
                 )
         if now is not None:
-            slot_left, slot_right, slot_top = now
+            line_left, line_right, line_y = now
             radius = float(_NOW_DOT_RADIUS)
-            cy = slot_top + 0.5
-            draw.rectangle([slot_left, slot_top, slot_right, slot_top + 1], fill=_NOW_RULE)
+            cy = line_y + 0.5
+            draw.rectangle([line_left, line_y, line_right, line_y + 1], fill=_NOW_RULE)
             draw.ellipse(
-                [slot_left - radius, cy - radius, slot_left + radius, cy + radius],
+                [line_left - radius, cy - radius, line_left + radius, cy + radius],
                 fill=_NOW_RULE,
             )
 

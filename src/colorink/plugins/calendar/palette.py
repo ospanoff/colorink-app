@@ -54,7 +54,7 @@ _BAR_GAP = 3
 # Today: black capsule on the day number, and a now-line with a dot on today's column.
 _TODAY_PILL = (0, 0, 0)  # L0  – day-number capsule
 _TODAY_PILL_TEXT = (255, 255, 255)  # L15
-_NOW_RULE = (17, 17, 17)  # L1  – current half-hour line and its left dot
+_NOW_RULE = (17, 17, 17)  # L1  – current-time line and its left dot
 _NOW_DOT_RADIUS = 6
 
 # --- Layout constants -----------------------------------------------------------------------
@@ -71,3 +71,5 @@ _GAP_BELOW_DAY_NUMBER = 6
 _WEEK_GAP = 18
 # All-day bar height = event_px * this factor.
 _EVENT_LINE_STEP_FACTOR = 1.34
+# Events and the now line snap to this many minutes. Halfway rounds later.
+_SNAP_MINUTES = 10

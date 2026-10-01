@@ -32,7 +32,7 @@ class CalendarPluginConfig(PluginBaseConfig):
     )
     now: time | None = Field(
         default=None,
-        description="Optional local clock time (HH:MM) for the current half-hour marker. "
+        description="Optional local clock time (HH:MM) for the current-time marker. "
         "Omit to use the current time in the configured timezone.",
     )
 
