@@ -11,8 +11,8 @@ from zoneinfo import ZoneInfo
 from icalendar import Calendar
 from recurring_ical_events import of
 
-# Number of consecutive Mon-Sun weeks shown in the rolling grid.
-_ROLLING_WEEKS = 3
+# Current Mon-Sun week plus the next one.
+_ROLLING_WEEKS = 2
 
 
 def rolling_weeks_and_visible(
@@ -20,8 +20,7 @@ def rolling_weeks_and_visible(
 ) -> tuple[list[tuple[date, ...]], frozenset[date]]:
     """Mon-first weeks: first row is the week that contains ``today``.
 
-    Returns ``_ROLLING_WEEKS`` consecutive Mon-Sun weeks; row 0 starts on the Monday of
-    ``today``'s week.
+    Returns two consecutive Mon-Sun weeks; row 0 starts on the Monday of ``today``'s week.
     """
     monday0 = today - timedelta(days=today.weekday())
     weeks: list[tuple[date, ...]] = []
@@ -36,6 +35,7 @@ class IcsEventRow(TypedDict):
     title: str
     time: str | None  # "HH:MM" start in configured timezone, or None for all-day
     end_time: NotRequired[str | None]  # "HH:MM" end when same local day as start
+    location: NotRequired[str | None]
 
 
 class MultidaySpanDict(TypedDict):
@@ -44,8 +44,18 @@ class MultidaySpanDict(TypedDict):
     title: str
     time: str | None
     end_time: NotRequired[str | None]
+    location: NotRequired[str | None]
     start: str  # ISO date
     end: str  # ISO date, inclusive
+
+
+def _location_text(comp) -> str | None:
+    """Single-line ``LOCATION``, or None when the component has no place."""
+    raw = comp.get("location")
+    if raw is None:
+        return None
+    text = " ".join(str(raw).split())
+    return text or None
 
 
 def host_for_label(url: str) -> str:
@@ -182,14 +192,16 @@ def _process_all_day_event(
     if key in seen_multiday:
         return
     seen_multiday.add(key)
-    multiday.append(
-        MultidaySpanDict(
-            title=title,
-            time=None,
-            start=clip_start.isoformat(),
-            end=clip_end.isoformat(),
-        )
+    row = MultidaySpanDict(
+        title=title,
+        time=None,
+        start=clip_start.isoformat(),
+        end=clip_end.isoformat(),
     )
+    loc = _location_text(comp)
+    if loc:
+        row["location"] = loc
+    multiday.append(row)
 
 
 def _process_timed_multiday_span(
@@ -227,6 +239,9 @@ def _process_timed_multiday_span(
     )
     if end_lbl is not None:
         row["end_time"] = end_lbl
+    loc = _location_text(comp)
+    if loc:
+        row["location"] = loc
     multiday.append(row)
 
 
@@ -254,6 +269,9 @@ def _process_timed_event(
         base: IcsEventRow = {"title": title, "time": time_label}
         if end_lbl is not None:
             base["end_time"] = end_lbl
+        loc = _location_text(comp)
+        if loc:
+            base["location"] = loc
         return base
 
     if start_d == end_d:
@@ -280,8 +298,8 @@ def events_by_day_from_ics(
 ) -> tuple[dict[date, list[IcsEventRow]], list[MultidaySpanDict]]:
     """Map local dates to events for the **visible rolling grid** (Mon-Sun weeks).
 
-    Visible dates come from :func:`rolling_weeks_and_visible`: consecutive Mon-Sun weeks
-    starting with the week that contains ``today`` (count set by ``_ROLLING_WEEKS``).
+    Visible dates come from :func:`rolling_weeks_and_visible`: two Mon-Sun weeks
+    starting with the week that contains ``today``.
 
     **All-day** instances (``DTSTART`` is a ``DATE``) go to ``multiday`` as ``time=None``.
 

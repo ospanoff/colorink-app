@@ -10,3 +10,4 @@ data/
 .env
 dist/
 *.egg-info/
+*.tar.gz

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import ConfigDict, Field, field_validator
@@ -29,6 +29,11 @@ class CalendarPluginConfig(PluginBaseConfig):
         default=None,
         description="Optional calendar day to pin the view (year/month and rolling grid). "
         "Omit to use the current local day in the configured timezone.",
+    )
+    now: time | None = Field(
+        default=None,
+        description="Optional local clock time (HH:MM) for the current half-hour marker. "
+        "Omit to use the current time in the configured timezone.",
     )
 
     @field_validator("timezone")

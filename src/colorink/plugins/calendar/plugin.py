@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -29,6 +29,15 @@ def _today_from_config(plugin_config: dict[str, Any], tz: ZoneInfo) -> date:
     return date.fromisoformat(str(raw))
 
 
+def _now_from_config(plugin_config: dict[str, Any], tz: ZoneInfo, today: date) -> datetime:
+    """Local clock: optional ``now`` (HH:MM) in config on ``today``, else now in ``tz``."""
+    raw = plugin_config.get("now")
+    if raw is None or raw == "":
+        return datetime.now(tz)
+    clock = raw if isinstance(raw, time) else time.fromisoformat(str(raw))
+    return datetime.combine(today, clock, tzinfo=tz)
+
+
 def _make_result(
     *,
     ok: bool,
@@ -40,6 +49,7 @@ def _make_result(
     url_label: str,
     timezone: str,
     today: str,
+    now: str,
 ) -> dict[str, Any]:
     return {
         "ok": ok,
@@ -51,11 +61,12 @@ def _make_result(
         "url_label": url_label,
         "timezone": timezone,
         "today": today,
+        "now": now,
     }
 
 
 class CalendarPlugin(ImagePlugin):
-    """Fetches an ICS feed from a URL and draws a month grid with events."""
+    """Fetches an ICS feed from a URL and draws a two-week grid with events."""
 
     slug = "calendar"
     title = "Calendar"
@@ -81,6 +92,7 @@ class CalendarPlugin(ImagePlugin):
         tz = ZoneInfo(str(plugin_config.get("timezone") or "UTC"))
         today_d = _today_from_config(plugin_config, tz)
         today_iso = today_d.isoformat()
+        now_iso = _now_from_config(plugin_config, tz, today_d).isoformat(timespec="minutes")
         year, month = today_d.year, today_d.month
         url = str(plugin_config.get("ics_url", "")).strip()
 
@@ -95,6 +107,7 @@ class CalendarPlugin(ImagePlugin):
                 url_label="",
                 timezone=str(tz),
                 today=today_iso,
+                now=now_iso,
             )
 
         try:
@@ -113,6 +126,7 @@ class CalendarPlugin(ImagePlugin):
                 url_label=host_for_label(url),
                 timezone=str(tz),
                 today=today_iso,
+                now=now_iso,
             )
         except (httpx.HTTPError, OSError, ValueError) as e:
             return _make_result(
@@ -125,6 +139,7 @@ class CalendarPlugin(ImagePlugin):
                 url_label=host_for_label(url),
                 timezone=str(tz),
                 today=today_iso,
+                now=now_iso,
             )
 
     def render_raw(

@@ -1,4 +1,4 @@
-"""Calendar plugin package: ICS URL -> month grid PNG.
+"""Calendar plugin package: ICS URL -> two-week grid PNG.
 
 Set optional ``today`` in :class:`~colorink.plugins.calendar.config.CalendarPluginConfig` to
 pin the visible month and grid anchor; omit for the current local day in the configured

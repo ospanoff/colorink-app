@@ -1,4 +1,4 @@
-"""Font loading, the MonthFonts dataclass, and Inter + bitmap-emoji text layout."""
+"""Font loading, the MonthFonts dataclass, and text layout with bitmap emoji."""
 
 from __future__ import annotations
 
@@ -14,10 +14,11 @@ from colorink.plugins.calendar.palette import _EVENT_LINE_STEP_FACTOR
 # Emoji bitmap height vs Inter “M” line box (bumped slightly for e-paper readability).
 _EMOJI_HEIGHT_VS_TEXT = 1.20
 
-# Inter for Latin; bundled Noto bitmap emoji (CBDT). COLRv1 often does not rasterize in Pillow.
+# Inter for Latin and Cyrillic; bundled Noto bitmap emoji (CBDT).
+# COLRv1 often does not rasterize in Pillow.
 _FONTS_DIR = Path(__file__).resolve().parent / "fonts"
-_INTER_REGULAR = _FONTS_DIR / "Inter-Regular.ttf"
-_INTER_BOLD = _FONTS_DIR / "Inter-Bold.ttf"
+_TEXT_REGULAR = _FONTS_DIR / "Inter-Regular.ttf"
+_TEXT_BOLD = _FONTS_DIR / "Inter-Bold.ttf"
 _NOTO_COLOR_BITMAP = _FONTS_DIR / "NotoColorEmoji.ttf"
 
 _PIC = regex.compile(r"\p{Extended_Pictographic}", regex.VERSION1)
@@ -187,15 +188,29 @@ def draw_line(
 
 
 def _calendar_font_regular(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    if not _INTER_REGULAR.is_file():
-        raise FileNotFoundError(f"Bundled font missing: {_INTER_REGULAR}")
-    return ImageFont.truetype(str(_INTER_REGULAR), size)
+    if not _TEXT_REGULAR.is_file():
+        raise FileNotFoundError(f"Bundled font missing: {_TEXT_REGULAR}")
+    return ImageFont.truetype(str(_TEXT_REGULAR), size)
 
 
 def _calendar_font_bold(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    if not _INTER_BOLD.is_file():
-        raise FileNotFoundError(f"Bundled font missing: {_INTER_BOLD}")
-    return ImageFont.truetype(str(_INTER_BOLD), size)
+    if not _TEXT_BOLD.is_file():
+        raise FileNotFoundError(f"Bundled font missing: {_TEXT_BOLD}")
+    return ImageFont.truetype(str(_TEXT_BOLD), size)
+
+
+def _line_box(font: ImageFont.FreeTypeFont | ImageFont.ImageFont) -> int:
+    """Ascent + descent: the vertical space one line of ``font`` occupies."""
+    if isinstance(font, ImageFont.FreeTypeFont):
+        ascent, descent = font.getmetrics()
+        return ascent + descent
+    return max(8, int(getattr(font, "size", 12) * 1.2))
+
+
+def _ascent(font: ImageFont.FreeTypeFont | ImageFont.ImageFont) -> int:
+    if isinstance(font, ImageFont.FreeTypeFont):
+        return font.getmetrics()[0]
+    return max(8, int(getattr(font, "size", 12) * 0.75))
 
 
 @dataclass(frozen=True)
@@ -203,13 +218,11 @@ class MonthFonts:
     """Scaled fonts and vertical rhythm for a given canvas size."""
 
     pad: int
-    title_px: int
-    header_px: int
     dow_px: int
     daynum_px: int
     event_px: int
     event_line_step: int
-    header: ImageFont.FreeTypeFont | ImageFont.ImageFont
+    meta: ImageFont.FreeTypeFont | ImageFont.ImageFont
     dow: ImageFont.FreeTypeFont | ImageFont.ImageFont
     day_number: ImageFont.FreeTypeFont | ImageFont.ImageFont
     event_regular: ImageFont.FreeTypeFont | ImageFont.ImageFont
@@ -217,22 +230,24 @@ class MonthFonts:
 
     @classmethod
     def for_canvas(cls, width: int, height: int) -> MonthFonts:
+        """Sizes for a two-week hour grid: modest day numbers, compact all-day bars.
+
+        Timed events use a separate face sized to the half-hour slot at draw time.
+        """
         short = min(width, height)
-        title_px = max(18, min(short // 9, 64))
-        header_px = max(24, min(short // 10, 48))
-        dow_px = max(13, int(title_px * 0.44))
-        daynum_px = max(12, int(title_px * 0.40))
-        event_px = max(14, int(title_px * 0.40))
-        pad = max(8, short // 56)
+        pad = max(10, short // 80)
+        col = max(1.0, (width - 2 * pad) / 7.0)
+        daynum_px = max(15, min(21, short // 70))
+        meta_px = max(11, min(13, daynum_px - 4))
+        dow_px = max(14, min(18, short // 78))
+        event_px = max(16, min(18, int(col / 14)))
         return cls(
             pad=pad,
-            title_px=title_px,
-            header_px=header_px,
             dow_px=dow_px,
             daynum_px=daynum_px,
             event_px=event_px,
-            event_line_step=int(event_px * _EVENT_LINE_STEP_FACTOR),
-            header=_calendar_font_bold(header_px),
+            event_line_step=max(event_px + 2, int(event_px * _EVENT_LINE_STEP_FACTOR)),
+            meta=_calendar_font_regular(meta_px),
             dow=_calendar_font_bold(dow_px),
             day_number=_calendar_font_bold(daynum_px),
             event_regular=_calendar_font_regular(event_px),

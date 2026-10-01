@@ -163,7 +163,7 @@ UID:colorink-test-20260413-daily@fixture
 DTSTAMP:20260408T120000Z
 DTSTART:20260413T082500Z
 DTEND:20260413T092500Z
-SUMMARY:April 13 daily (08:25 UTC)
+SUMMARY:April 13 daily (08:25 UTC loooooooooooooooooooong)
 END:VEVENT
 BEGIN:VEVENT
 UID:colorink-test-20260414-daily@fixture
@@ -444,7 +444,7 @@ UID:colorink-test-20260406-3day-allday@fixture
 DTSTAMP:20260408T120000Z
 DTSTART;VALUE=DATE:20260406
 DTEND;VALUE=DATE:20260409
-SUMMARY:Apr 6–8 (3-day all-day)
+SUMMARY:😛 Apr 6–8 (3-day all-day)
 END:VEVENT
 BEGIN:VEVENT
 UID:colorink-test-20260413-3day-allday@fixture

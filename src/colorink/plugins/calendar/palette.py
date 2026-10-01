@@ -1,4 +1,4 @@
-"""RGB palette constants, layout tuning values, and the multiday bar colour selector.
+"""RGB palette constants and layout tuning values for the two-week grid.
 
 All colour constants use neutral grey (R = G = B) mapped to one of the sixteen
 quantisation steps produced by a 4-bit greyscale e-paper display:
@@ -15,63 +15,59 @@ from __future__ import annotations
 
 # --- Palette (16-step greyscale) -----------------------------------------------------------
 
-_HEADER_TEXT = (17, 17, 17)  # L1  – month-section headings
-_WEEKDAY_LABEL = (68, 68, 68)  # L4  – Mon–Sun header labels
+_WEEKDAY_LABEL = (119, 119, 119)  # L7  – quiet Mon–Sun header labels
+_WEEKDAY_LABEL_TODAY = (17, 17, 17)  # L1  – today's weekday label
+_HEADER_RULE = (221, 221, 221)  # L13 – hairline under the weekday labels
 _DAY_IN_MONTH = (17, 17, 17)  # L1  – day-of-month digit
-# Slightly darker than the original ~220 so grid lines survive Floyd-Steinberg.
-# If lines are still invisible on your device, set dither_mode = NONE.
-_GRID_LINE = (170, 170, 170)  # L10 – cell borders
-_WEEKDAY_CELL_BG = (255, 255, 255)  # L15 – plain white
-_WEEKEND_CELL_BG = (238, 238, 238)  # L14 – subtle Sat/Sun tint
-
-_EVENT_TIME = (68, 68, 68)  # L4  – timed-event clock text
-_EVENT_TITLE = (17, 17, 17)  # L1  – event title
-_OVERFLOW_MORE = (51, 51, 51)  # L3  – "+N events" chip text
+_DAY_NUMBER_PAST = (153, 153, 153)  # L9  – day number on a past day
+_MONTH_TAG = (102, 102, 102)  # L6  – "Oct" beside the 1st
+_MONTH_TAG_PAST = (170, 170, 170)  # L10
+# Exact palette steps survive dithering, so near-white rules stay crisp.
+_GRID_LINE = (238, 238, 238)  # L14 – column separators
+_HOUR_LINE = (238, 238, 238)  # L14 – barely-there hour rules
+_HOUR_LABEL = (153, 153, 153)  # L9  – hour gutter labels
 _ERROR_TEXT = (34, 34, 34)  # L2  – ICS error message (no colour on greyscale)
 
+# Timed event cards: grey fill with a dark left edge, no outline.
+_TIMED_BLOCK_FILL = (221, 221, 221)  # L13
+_TIMED_BLOCK_ACCENT = (51, 51, 51)  # L3
+_TIMED_BLOCK_FILL_PAST = (238, 238, 238)  # L14
+_TIMED_BLOCK_ACCENT_PAST = (170, 170, 170)  # L10
+_TIMED_BLOCK_RADIUS = 5
+_TIMED_BLOCK_ACCENT_WIDTH = 3
+
+# Event text (cards and all-day bars).
+_EVENT_TIME = (68, 68, 68)  # L4  – clock line
+_EVENT_TITLE = (17, 17, 17)  # L1  – event title
+_EVENT_LOCATION = (85, 85, 85)  # L5  – place line under the title
 # Past-day events: visibly muted but distinct from each other and from background.
 _EVENT_TIME_PAST = (153, 153, 153)  # L9
 _EVENT_TITLE_PAST = (119, 119, 119)  # L7
-_OVERFLOW_PAST = (119, 119, 119)  # L7
+_EVENT_LOCATION_PAST = (153, 153, 153)  # L9
 
-# Overflow chip ("+N events" pill)
-_OVERFLOW_CHIP_BG = (221, 221, 221)  # L13 – active
-_OVERFLOW_CHIP_BG_PAST = (238, 238, 238)  # L14 – past
-_OVERFLOW_CHIP_OUTLINE = (153, 153, 153)  # L9  – active border
-_OVERFLOW_CHIP_OUTLINE_PAST = (204, 204, 204)  # L12 – past border
-_OVERFLOW_CHIP_RADIUS = 4
+# All-day bars: borderless soft pills.
+_BAR_FILL = (204, 204, 204)  # L12
+_BAR_FILL_PAST = (238, 238, 238)  # L14
+_BAR_TOP_INSET = 2
+_BAR_GAP = 3
 
-# Multiday bars: one style for every lane (no alternating greys).
-_MULTIDAY_BAR_FILL = (238, 238, 238)  # L14 – super light grey interior
-_MULTIDAY_BAR_OUTLINE = (0, 0, 0)  # L0 – black border
-_MULTIDAY_BG_TOP_INSET = 2
-# Multiday stripe corner radius is derived from ``bar_h`` in ``render`` (pill caps).
-
-# Today: clearly distinct from white (L15) and near-white weekend (L14).
-_TODAY_CELL_BG = (204, 204, 204)  # L12 – 3 steps below white
-_TODAY_OUTLINE = (51, 51, 51)  # L3  – strong border
+# Today: black capsule on the day number, and a now-line with a dot on today's column.
+_TODAY_PILL = (0, 0, 0)  # L0  – day-number capsule
+_TODAY_PILL_TEXT = (255, 255, 255)  # L15
+_NOW_RULE = (17, 17, 17)  # L1  – current half-hour line and its left dot
+_NOW_DOT_RADIUS = 6
 
 # --- Layout constants -----------------------------------------------------------------------
 
 _WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-# Padding inside each day cell (day number, event text); must match header alignment math.
-_CELL_INNER_PAD = 4
-# Day-of-month digit: must match ``_draw_day_cell_chrome`` y offset.
-_DAY_NUMBER_TOP_PAD = 3
-# Space between bottom of day number and first multiday bar / event line.
-_GAP_BELOW_DAY_NUMBER = 4
-# List row height = event_px * this factor; multiday stripes use the same step.
-# Slightly > 1.0 gives air between lines and room inside bars.
-_EVENT_LINE_STEP_FACTOR = 1.26
-# Monday-first week: column indices for Sat/Sun background tint.
-_WEEKEND_COLUMNS = frozenset((5, 6))
 _GRID_COLUMNS = 7
-# Vertical space between one month's section and the next.
-_MONTH_INTER_BLOCK_GAP = 10
-
-
-def _multiday_bar_palette(
-    _lane: int, _is_past: bool
-) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-    """Bar fill and outline for a multiday stripe (lane and past flags ignored for colour)."""
-    return _MULTIDAY_BAR_FILL, _MULTIDAY_BAR_OUTLINE
+# Padding inside each day cell (day number, weekday label).
+_CELL_INNER_PAD = 4
+# Leaves room for the today capsule, which grows upward from the glyph.
+_DAY_NUMBER_TOP_PAD = 3
+# Space between bottom of day number and first all-day bar / hour grid.
+_GAP_BELOW_DAY_NUMBER = 6
+# Whitespace between the two week rows (replaces a separator rule).
+_WEEK_GAP = 18
+# All-day bar height = event_px * this factor.
+_EVENT_LINE_STEP_FACTOR = 1.34

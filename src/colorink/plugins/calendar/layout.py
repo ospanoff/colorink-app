@@ -1,11 +1,11 @@
-"""Payload parsing, lane-packing algorithms, and cell geometry helpers."""
+"""Payload parsing, lane packing, and cell geometry helpers."""
 
 from __future__ import annotations
 
 from datetime import date
 from typing import Any
 
-from colorink.plugins.calendar.fonts import MonthFonts
+from colorink.plugins.calendar.fonts import MonthFonts, _line_box
 from colorink.plugins.calendar.palette import (
     _DAY_NUMBER_TOP_PAD,
     _GAP_BELOW_DAY_NUMBER,
@@ -47,31 +47,10 @@ def _multiday_spans_from_payload(raw: Any) -> list[dict[str, Any]]:
         et = item.get("end_time")
         if et:
             row["end_time"] = str(et)
+        loc = item.get("location")
+        if loc:
+            row["location"] = str(loc)
         out.append(row)
-    return out
-
-
-def _group_weeks_by_week_start_month(
-    weeks: list[tuple[date, ...]],
-) -> list[tuple[tuple[int, int], list[tuple[date, ...]]]]:
-    """Split Mon-first week rows into blocks that share the same (year, month) on day 0.
-
-    Day 0 is Monday. Used so month title bands align when the grid spans two months.
-    """
-    if not weeks:
-        return []
-    out: list[tuple[tuple[int, int], list[tuple[date, ...]]]] = []
-    cur = (weeks[0][0].year, weeks[0][0].month)
-    run: list[tuple[date, ...]] = [weeks[0]]
-    for w in weeks[1:]:
-        k = (w[0].year, w[0].month)
-        if k == cur:
-            run.append(w)
-        else:
-            out.append((cur, run))
-            cur = k
-            run = [w]
-    out.append((cur, run))
     return out
 
 
@@ -94,18 +73,54 @@ def _event_time_and_title(item: Any) -> tuple[str | None, str]:
     return None, str(item)
 
 
-def _event_row_slots_for_item(item: Any) -> int:
-    """Vertical budget in ``event_line_step`` units (timed rows use two lines)."""
-    time_part, _ = _event_time_and_title(item)
-    return 2 if time_part else 1
+def _event_location(item: Any) -> str | None:
+    """Place line from an event dict, or None."""
+    if not isinstance(item, dict):
+        return None
+    raw = item.get("location")
+    if not raw:
+        return None
+    text = str(raw).strip()
+    return text or None
 
 
-# --- Multiday lane-packing algorithms --------------------------------------------------------
+# --- Lane packing ----------------------------------------------------------------------------
 
 
-def _intervals_overlap_col(a0: int, a1: int, b0: int, b1: int) -> bool:
-    """Inclusive column indices within a week row."""
-    return a0 <= b1 and b0 <= a1
+def _pack_lanes[T](
+    spans: list[tuple[int, int, T]],
+    *,
+    inclusive: bool,
+) -> tuple[list[tuple[int, int, T, int]], int]:
+    """Greedy lanes for overlapping ``(start, end, payload)`` spans.
+
+    Longer spans win ties at the same start. ``inclusive`` treats ``end`` as part of the span
+    (week columns); otherwise spans are half-open (minutes), so back-to-back events share a lane.
+    """
+
+    def overlaps(a0: int, a1: int, b0: int, b1: int) -> bool:
+        if inclusive:
+            return a0 <= b1 and b0 <= a1
+        return a0 < b1 and b0 < a1
+
+    ordered = sorted(spans, key=lambda s: (s[0], -(s[1] - s[0])))
+    lanes: list[list[tuple[int, int]]] = []
+    out: list[tuple[int, int, T, int]] = []
+    for start, end, payload in ordered:
+        lane = next(
+            (
+                i
+                for i, occupied in enumerate(lanes)
+                if not any(overlaps(start, end, a, b) for a, b in occupied)
+            ),
+            None,
+        )
+        if lane is None:
+            lanes.append([])
+            lane = len(lanes) - 1
+        lanes[lane].append((start, end))
+        out.append((start, end, payload, lane))
+    return out, len(lanes)
 
 
 def _clip_span_to_week(
@@ -121,76 +136,32 @@ def _clip_span_to_week(
     return i0, i1
 
 
-def _assign_multiday_lanes(
-    segments: list[tuple[int, int, dict[str, Any]]],
-) -> tuple[list[tuple[int, int, dict[str, Any], int]], int]:
-    """Greedy lane packing for overlapping week segments. Returns (annotated, lane_count)."""
-    ordered = sorted(segments, key=lambda s: (s[0], -(s[1] - s[0])))
-    lanes: list[list[tuple[int, int]]] = []
-    out: list[tuple[int, int, dict[str, Any], int]] = []
-    for i0, i1, m in ordered:
-        placed: int | None = None
-        for li, occ in enumerate(lanes):
-            if not any(_intervals_overlap_col(i0, i1, a, b) for a, b in occ):
-                occ.append((i0, i1))
-                placed = li
-                break
-        if placed is None:
-            lanes.append([(i0, i1)])
-            placed = len(lanes) - 1
-        out.append((i0, i1, m, placed))
-    return out, len(lanes)
+def _week_bar_segments(
+    week: tuple[date, ...],
+    spans: list[dict[str, Any]],
+) -> list[tuple[int, int, dict[str, Any], int]]:
+    """Multiday spans clipped to ``week`` as ``(first_col, last_col, span, lane)``."""
+    segments: list[tuple[int, int, dict[str, Any]]] = []
+    for span in spans:
+        clipped = _clip_span_to_week(span["start"], span["end"], week)
+        if clipped:
+            segments.append((clipped[0], clipped[1], span))
+    annotated, _lane_count = _pack_lanes(segments, inclusive=True)
+    return annotated
 
 
-# --- Cell geometry helpers -------------------------------------------------------------------
-
-
-def _day_number_row_height_px(fonts: MonthFonts) -> int:
-    """Height from cell top through the bottom of the day-of-month glyph."""
-    from PIL import ImageFont  # local import to avoid hard PIL dep at module level
-
-    if isinstance(fonts.day_number, ImageFont.FreeTypeFont):
-        ascent, descent = fonts.day_number.getmetrics()
-        return _DAY_NUMBER_TOP_PAD + ascent + descent
-    return _DAY_NUMBER_TOP_PAD + int(fonts.daynum_px * 1.28)
-
-
-def _cell_content_top_y(cell_top: float, fonts: MonthFonts) -> int:
-    """First y coordinate below the day number (multiday bars and event lines start here)."""
-    return int(
-        cell_top + _day_number_row_height_px(fonts) + _GAP_BELOW_DAY_NUMBER,
-    )
-
-
-def _multiday_lane_height_px(fonts: MonthFonts) -> int:
-    """One multiday stripe uses exactly the same vertical quantum as a list event row."""
-    return fonts.event_line_step
-
-
-def _event_row_slots_in_cell(
-    row_height: float,
-    fonts: MonthFonts,
-    reserved_top: float = 0,
-) -> int:
-    """Row slots below the day number (and multiday reserve); each is ``event_line_step`` tall."""
-    header = _day_number_row_height_px(fonts) + _GAP_BELOW_DAY_NUMBER
-    step = float(fonts.event_line_step)
-    return max(1, int((row_height - header - reserved_top) // max(11.0, step)))
-
-
-def _reserved_px_for_column_bar_count(k: int, bar_h: int, bar_gap: int) -> float:
-    """Vertical space for ``k`` stacked multiday bars (``k == 0`` -> none)."""
-    if k <= 0:
-        return 0.0
-    return float(k * bar_h + (k - 1) * bar_gap)
-
-
-def bars_per_column_from_annotated(
-    annotated: list[tuple[int, int, dict[str, Any], int]],
-) -> list[int]:
-    """Max (lane + 1) for each grid column, derived from lane-annotated segments."""
+def _bars_per_column(annotated: list[tuple[int, int, dict[str, Any], int]]) -> list[int]:
+    """Max (lane + 1) for each grid column, so later bars stack below every multiday strip."""
     bars_per_col = [0] * _GRID_COLUMNS
-    for i0, i1, _m, lane in annotated:
+    for i0, i1, _span, lane in annotated:
         for ci in range(i0, i1 + 1):
             bars_per_col[ci] = max(bars_per_col[ci], lane + 1)
     return bars_per_col
+
+
+# --- Cell geometry ---------------------------------------------------------------------------
+
+
+def _cell_content_top_y(cell_top: float, fonts: MonthFonts) -> int:
+    """First y coordinate below the day number (all-day bars and the hour grid start here)."""
+    return int(cell_top + _DAY_NUMBER_TOP_PAD + _line_box(fonts.day_number) + _GAP_BELOW_DAY_NUMBER)

@@ -1,88 +1,132 @@
-"""Pillow rendering for the month grid."""
+"""Pillow rendering for the two-week grid."""
 
 from __future__ import annotations
 
 import calendar
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
 from colorink.plugins.calendar.fonts import (
     MonthFonts,
+    _ascent,
+    _calendar_font_bold,
     _calendar_font_regular,
+    _line_box,
     draw_line,
     line_width,
     truncate_line,
 )
 from colorink.plugins.calendar.ics import rolling_weeks_and_visible
 from colorink.plugins.calendar.layout import (
-    _assign_multiday_lanes,
+    _bars_per_column,
     _cell_content_top_y,
-    _clip_span_to_week,
-    _event_row_slots_for_item,
-    _event_row_slots_in_cell,
+    _event_location,
     _event_time_and_title,
     _events_by_day_from_payload,
-    _group_weeks_by_week_start_month,
-    _multiday_lane_height_px,
     _multiday_spans_from_payload,
-    _reserved_px_for_column_bar_count,
-    bars_per_column_from_annotated,
+    _pack_lanes,
+    _week_bar_segments,
 )
 from colorink.plugins.calendar.palette import (
+    _BAR_FILL,
+    _BAR_FILL_PAST,
+    _BAR_GAP,
+    _BAR_TOP_INSET,
     _CELL_INNER_PAD,
     _DAY_IN_MONTH,
+    _DAY_NUMBER_PAST,
     _DAY_NUMBER_TOP_PAD,
     _ERROR_TEXT,
+    _EVENT_LOCATION,
+    _EVENT_LOCATION_PAST,
     _EVENT_TIME,
     _EVENT_TIME_PAST,
     _EVENT_TITLE,
     _EVENT_TITLE_PAST,
     _GRID_COLUMNS,
     _GRID_LINE,
-    _HEADER_TEXT,
-    _MONTH_INTER_BLOCK_GAP,
-    _MULTIDAY_BG_TOP_INSET,
-    _OVERFLOW_CHIP_BG,
-    _OVERFLOW_CHIP_BG_PAST,
-    _OVERFLOW_CHIP_OUTLINE,
-    _OVERFLOW_CHIP_OUTLINE_PAST,
-    _OVERFLOW_CHIP_RADIUS,
-    _OVERFLOW_MORE,
-    _OVERFLOW_PAST,
-    _TODAY_CELL_BG,
-    _TODAY_OUTLINE,
-    _WEEKDAY_CELL_BG,
-    _WEEKEND_CELL_BG,
-    _WEEKEND_COLUMNS,
-    _multiday_bar_palette,
+    _HEADER_RULE,
+    _HOUR_LABEL,
+    _HOUR_LINE,
+    _MONTH_TAG,
+    _MONTH_TAG_PAST,
+    _NOW_DOT_RADIUS,
+    _NOW_RULE,
+    _TIMED_BLOCK_ACCENT,
+    _TIMED_BLOCK_ACCENT_PAST,
+    _TIMED_BLOCK_ACCENT_WIDTH,
+    _TIMED_BLOCK_FILL,
+    _TIMED_BLOCK_FILL_PAST,
+    _TIMED_BLOCK_RADIUS,
+    _TODAY_PILL,
+    _TODAY_PILL_TEXT,
+    _WEEK_GAP,
+    _WEEKDAY_LABEL,
+    _WEEKDAY_LABEL_TODAY,
+    _WEEKDAYS,
 )
 
-
-def _event_row_baseline(y_slot_top: float, fonts: MonthFonts) -> int:
-    """``anchor=ls`` baseline: slot top + ``event_regular`` ascent (list + multiday rows)."""
-    line_top = int(y_slot_top)
-    font = fonts.event_regular
-    if isinstance(font, ImageFont.FreeTypeFont):
-        ascent, _ = font.getmetrics()
-    else:
-        ascent = max(8, int(getattr(font, "size", 12) * 0.75))
-    return line_top + ascent
+# Share of a title's line box that must fit inside a card; the rest is descender room.
+_TITLE_FIT = 0.75
 
 
-def _multiday_strip_y_bounds(y0: float, bar_h: int) -> tuple[float, float]:
-    """Top/bottom y for the rounded fill; full height ``bar_h`` (see ``_MULTIDAY_BG_TOP_INSET``)."""
-    y_top = y0 + _MULTIDAY_BG_TOP_INSET
-    return y_top, y_top + bar_h
-
-
-def _multiday_bar_corner_radius(bar_h: int) -> int:
-    """Corner radius for spanning multiday bars: pill-like caps within stripe height."""
+def _bar_radius(bar_h: int) -> int:
+    """Pill caps: half the stripe height, and never sharper than 5px."""
     return max(5, bar_h // 2)
 
 
-def _truncate_multiday_time_title(
+def _bar_label_inset(bar_h: int) -> int:
+    """Left inset past the pill cap so the name is not against the edge."""
+    return _bar_radius(bar_h) + 6
+
+
+def _bar_fill(is_past: bool) -> tuple[int, int, int]:
+    return _BAR_FILL_PAST if is_past else _BAR_FILL
+
+
+def _bar_bounds(y0: float, bar_h: int) -> tuple[float, float]:
+    y_top = y0 + _BAR_TOP_INSET
+    return y_top, y_top + bar_h
+
+
+def _draw_bar(
+    draw: ImageDraw.ImageDraw,
+    *,
+    x0: float,
+    x1: float,
+    y0: float,
+    bar_h: int,
+    fill: tuple[int, int, int],
+) -> None:
+    y_top, y_bot = _bar_bounds(y0, bar_h)
+    draw.rounded_rectangle(
+        [x0, y_top, x1, y_bot],
+        radius=_bar_radius(bar_h),
+        fill=fill,
+        outline=fill,
+        width=1,
+    )
+
+
+def _bar_baseline(
+    draw: ImageDraw.ImageDraw,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    y0: float,
+    bar_h: int,
+) -> int:
+    """Baseline that puts the glyph box in the vertical middle of the pill.
+
+    Cap-height sits above the em-box center, so the result is dropped 2px.
+    """
+    y_top, y_bot = _bar_bounds(y0, bar_h)
+    box = draw.textbbox((0, 0), "Ag", font=font, anchor="ls")
+    center_from_baseline = (box[1] + box[3]) / 2.0
+    return int(round((y_top + y_bot) / 2.0 - center_from_baseline)) + 2
+
+
+def _truncate_bar_time_title(
     draw: ImageDraw.ImageDraw,
     time_str: str,
     title_str: str,
@@ -90,7 +134,7 @@ def _truncate_multiday_time_title(
     font_title: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     max_w: int,
 ) -> tuple[str, str]:
-    """Timed multiday label: time + space + truncated bold title within ``max_w``."""
+    """Timed all-day label: time + space + truncated bold title within ``max_w``."""
     gap = " "
     w_time = line_width(draw, time_str, font=font_time)
     w_gap = line_width(draw, gap, font=font_time)
@@ -102,180 +146,7 @@ def _truncate_multiday_time_title(
     return time_str, truncate_line(draw, title_str, font=font_title, max_w=budget)
 
 
-def _draw_multiday_rounded_fill(
-    draw: ImageDraw.ImageDraw,
-    *,
-    x0: float,
-    x1: float,
-    y0: float,
-    bar_h: int,
-    fill: tuple[int, int, int],
-    outline: tuple[int, int, int],
-) -> None:
-    y_top, y_bot = _multiday_strip_y_bounds(y0, bar_h)
-    draw.rounded_rectangle(
-        [x0, y_top, x1, y_bot],
-        radius=_multiday_bar_corner_radius(bar_h),
-        fill=fill,
-        outline=outline,
-        width=1,
-    )
-
-
-def _draw_timed_event_line(
-    draw: ImageDraw.ImageDraw,
-    *,
-    img: Image.Image,
-    left_x: int,
-    line_top: float,
-    max_width: int,
-    time_text: str,
-    title_text: str,
-    fonts: MonthFonts,
-    muted: bool = False,
-) -> None:
-    fill_time = _EVENT_TIME_PAST if muted else _EVENT_TIME
-    fill_title = _EVENT_TITLE_PAST if muted else _EVENT_TITLE
-    time_line = truncate_line(
-        draw,
-        time_text,
-        font=fonts.event_regular,
-        max_w=max_width,
-    )
-    tab = int(line_width(draw, "   ", font=fonts.event_regular))
-    title_budget = max(1, max_width - tab)
-    title_draw = truncate_line(
-        draw,
-        title_text,
-        font=fonts.event_bold,
-        max_w=title_budget,
-    )
-    bl1 = _event_row_baseline(line_top, fonts)
-    draw_line(
-        draw,
-        (float(left_x), bl1),
-        time_line,
-        image=img,
-        font=fonts.event_regular,
-        fill=fill_time,
-        anchor="ls",
-    )
-    bl2 = _event_row_baseline(line_top + fonts.event_line_step, fonts)
-    draw_line(
-        draw,
-        (float(left_x + tab), bl2),
-        title_draw,
-        image=img,
-        font=fonts.event_bold,
-        fill=fill_title,
-        anchor="ls",
-    )
-
-
-def _draw_title_only_event_line(
-    draw: ImageDraw.ImageDraw,
-    *,
-    img: Image.Image,
-    left_x: int,
-    baseline_y: int,
-    max_width: int,
-    title: str,
-    fonts: MonthFonts,
-    muted: bool = False,
-) -> None:
-    fill_title = _EVENT_TITLE_PAST if muted else _EVENT_TITLE
-    line = truncate_line(
-        draw,
-        title,
-        font=fonts.event_bold,
-        max_w=max_width,
-    )
-    draw_line(
-        draw,
-        (left_x, baseline_y),
-        line,
-        image=img,
-        font=fonts.event_bold,
-        fill=fill_title,
-        anchor="ls",
-    )
-
-
-def _overflow_chip_label(hidden_count: int) -> str:
-    """Chip text for events that did not fit: ``+1 event`` / ``+N events``."""
-    if hidden_count == 1:
-        return "+1 event"
-    return f"+{hidden_count} events"
-
-
-def _draw_overflow_chip(
-    draw: ImageDraw.ImageDraw,
-    *,
-    img: Image.Image,
-    left_x: float,
-    line_top: float,
-    max_width: int,
-    hidden_count: int,
-    fonts: MonthFonts,
-    muted: bool = False,
-) -> None:
-    """Pill-shaped overflow label when the list is truncated; left-aligned with event text."""
-    font = fonts.event_bold
-    pad_h = max(3, fonts.event_px // 5)
-    pad_v = max(1, fonts.event_px // 8)
-    inner_text_max = max(1, max_width - 2 * pad_h)
-    raw = _overflow_chip_label(hidden_count)
-    label0 = truncate_line(
-        draw,
-        raw,
-        font=font,
-        max_w=inner_text_max,
-        anchor="lm",
-    )
-    tw = float(line_width(draw, label0, font=font, anchor="lm"))
-    line_h = float(fonts.event_line_step)
-    if isinstance(font, ImageFont.FreeTypeFont):
-        ascent, descent = font.getmetrics()
-        text_h = ascent + descent
-    else:
-        text_h = max(8, int(getattr(font, "size", 12) * 1.2))
-    ch = int(min(float(text_h + 2 * pad_v), max(8.0, line_h - 1.0)))
-    cw = int(min(tw + 2.0 * pad_h, float(max(1, max_width))))
-    y0 = line_top + max(0.0, (line_h - float(ch)) / 2.0)
-    x0 = left_x
-    x1 = left_x + float(cw)
-    y1 = y0 + float(ch)
-    cy = (y0 + y1) / 2.0
-    fill_bg = _OVERFLOW_CHIP_BG_PAST if muted else _OVERFLOW_CHIP_BG
-    outline = _OVERFLOW_CHIP_OUTLINE_PAST if muted else _OVERFLOW_CHIP_OUTLINE
-    text_fill = _OVERFLOW_PAST if muted else _OVERFLOW_MORE
-    draw.rounded_rectangle(
-        [x0, y0, x1, y1],
-        radius=_OVERFLOW_CHIP_RADIUS,
-        fill=fill_bg,
-        outline=outline,
-        width=1,
-    )
-    inner_draw_max = max(1, int(cw - 2 * pad_h))
-    label = truncate_line(
-        draw,
-        label0,
-        font=font,
-        max_w=inner_draw_max,
-        anchor="lm",
-    )
-    draw_line(
-        draw,
-        (x0 + float(pad_h), cy),
-        label,
-        image=img,
-        font=font,
-        fill=text_fill,
-        anchor="lm",
-    )
-
-
-def _draw_multiday_bar_label(
+def _draw_bar_label(
     draw: ImageDraw.ImageDraw,
     *,
     img: Image.Image,
@@ -284,136 +155,60 @@ def _draw_multiday_bar_label(
     span: dict[str, Any],
     fonts: MonthFonts,
     line_top: float,
+    bar_h: int,
     muted: bool,
 ) -> None:
-    """Draw multiday text using the same colors and layout as list-event rows."""
+    """All-day text centered in the pill, inset from the rounded ends."""
     time_part, title_part = _event_time_and_title(span)
-    if time_part:
-        t_draw, title_draw = _truncate_multiday_time_title(
-            draw,
-            time_part,
-            title_part,
-            fonts.event_regular,
-            fonts.event_bold,
-            max_inner,
-        )
-        bl = _event_row_baseline(line_top, fonts)
-        fill_time = _EVENT_TIME_PAST if muted else _EVENT_TIME
-        fill_title = _EVENT_TITLE_PAST if muted else _EVENT_TITLE
-        gap = " "
-        x = float(inner_left)
+    location = _event_location(span)
+    if location:
+        title_part = f"{title_part} · {location}" if title_part else location
+    baseline = _bar_baseline(draw, fonts.event_bold, line_top, bar_h)
+    title_fill = _EVENT_TITLE_PAST if muted else _EVENT_TITLE
+    if not time_part:
         draw_line(
             draw,
-            (x, bl),
-            t_draw,
+            (inner_left, baseline),
+            truncate_line(draw, title_part, font=fonts.event_bold, max_w=max_inner),
             image=img,
-            font=fonts.event_regular,
-            fill=fill_time,
+            font=fonts.event_bold,
+            fill=title_fill,
             anchor="ls",
         )
-        if title_draw:
-            x += line_width(draw, t_draw, font=fonts.event_regular)
-            x += line_width(draw, gap, font=fonts.event_regular)
-            draw_line(
-                draw,
-                (x, bl),
-                title_draw,
-                image=img,
-                font=fonts.event_bold,
-                fill=fill_title,
-                anchor="ls",
-            )
-    else:
-        _draw_title_only_event_line(
+        return
+    time_draw, title_draw = _truncate_bar_time_title(
+        draw,
+        time_part,
+        title_part,
+        fonts.event_regular,
+        fonts.event_bold,
+        max_inner,
+    )
+    x = float(inner_left)
+    draw_line(
+        draw,
+        (x, baseline),
+        time_draw,
+        image=img,
+        font=fonts.event_regular,
+        fill=_EVENT_TIME_PAST if muted else _EVENT_TIME,
+        anchor="ls",
+    )
+    if title_draw:
+        x += line_width(draw, time_draw, font=fonts.event_regular)
+        x += line_width(draw, " ", font=fonts.event_regular)
+        draw_line(
             draw,
-            img=img,
-            left_x=inner_left,
-            baseline_y=_event_row_baseline(line_top, fonts),
-            max_width=max_inner,
-            title=title_part,
-            fonts=fonts,
-            muted=muted,
+            (x, baseline),
+            title_draw,
+            image=img,
+            font=fonts.event_bold,
+            fill=title_fill,
+            anchor="ls",
         )
 
 
-def _events_fit_and_overflow(items: list[Any], max_steps: int) -> tuple[int, bool]:
-    """How many items fit in ``max_steps`` line units; use overflow chip when some are hidden."""
-    if sum(_event_row_slots_for_item(it) for it in items) <= max_steps:
-        return len(items), False
-    cap_with_chip = max(0, max_steps - 1)
-    used = 0
-    for i, item in enumerate(items):
-        need = _event_row_slots_for_item(item)
-        if used + need > cap_with_chip:
-            return i, True
-        used += need
-    return len(items), False
-
-
-def _draw_events_in_cell(
-    draw: ImageDraw.ImageDraw,
-    *,
-    img: Image.Image,
-    cell_left: float,
-    cell_top: float,
-    column_width: float,
-    row_height: float,
-    items: list[Any],
-    fonts: MonthFonts,
-    muted: bool = False,
-    reserved_top: float = 0,
-) -> None:
-    """Draw stacked event lines inside one day cell."""
-    text_left = int(cell_left + _CELL_INNER_PAD)
-    line_top = _cell_content_top_y(cell_top, fonts) + int(reserved_top)
-    max_w = int(column_width - 2 * _CELL_INNER_PAD)
-    slots = _event_row_slots_in_cell(row_height, fonts, reserved_top)
-    event_limit, overflow = _events_fit_and_overflow(items, slots)
-
-    for i, item in enumerate(items):
-        if i >= event_limit:
-            if overflow:
-                _draw_overflow_chip(
-                    draw,
-                    img=img,
-                    left_x=float(text_left),
-                    line_top=float(line_top),
-                    max_width=max_w,
-                    hidden_count=len(items) - event_limit,
-                    fonts=fonts,
-                    muted=muted,
-                )
-            break
-
-        time_part, title_part = _event_time_and_title(item)
-        if time_part:
-            _draw_timed_event_line(
-                draw,
-                img=img,
-                left_x=text_left,
-                line_top=float(line_top),
-                max_width=max_w,
-                time_text=time_part,
-                title_text=title_part,
-                fonts=fonts,
-                muted=muted,
-            )
-            line_top += 2 * fonts.event_line_step
-        else:
-            _draw_title_only_event_line(
-                draw,
-                img=img,
-                left_x=text_left,
-                baseline_y=_event_row_baseline(float(line_top), fonts),
-                max_width=max_w,
-                title=title_part,
-                fonts=fonts,
-                muted=muted,
-            )
-            line_top += fonts.event_line_step
-
-
-def _draw_multiday_bars_for_week(
+def _draw_bars_for_week(
     draw: ImageDraw.ImageDraw,
     *,
     img: Image.Image,
@@ -425,56 +220,39 @@ def _draw_multiday_bars_for_week(
     spans: list[dict[str, Any]],
     today: date,
     bar_h: int,
-    bar_gap: int,
 ) -> list[float]:
-    """Draw week-spanning bars; returns per-column px to reserve above list events (length 7).
-
-    Reserve height is ``max_lane + 1`` stacked rows for that column (lane indices can have
-    gaps when a bar ends mid-week), so timed/list lines always start below every multiday strip.
-    """
-    segments: list[tuple[int, int, dict[str, Any]]] = []
-    for m in spans:
-        clipped = _clip_span_to_week(m["start"], m["end"], week)
-        if clipped:
-            i0, i1 = clipped
-            segments.append((i0, i1, m))
-    if not segments:
+    """Draw week-spanning bars. Returns per-column px reserved above the hour grid."""
+    annotated = _week_bar_segments(week, spans)
+    if not annotated:
         return [0.0] * _GRID_COLUMNS
-    annotated, _n_lanes = _assign_multiday_lanes(segments)
     base_y = float(_cell_content_top_y(cell_top, fonts))
-    for i0, i1, m, lane in annotated:
-        y0 = float(base_y + lane * (bar_h + bar_gap))
+    for i0, i1, span, lane in annotated:
+        y0 = float(base_y + lane * (bar_h + _BAR_GAP))
         x0 = pad + i0 * col_w + 2.0
         x1 = pad + (i1 + 1) * col_w - 2.0
-        span_end: date = m["end"]
-        is_past_span = span_end < today
-        fill, outline = _multiday_bar_palette(lane, is_past_span)
-        _draw_multiday_rounded_fill(
-            draw, x0=x0, x1=x1, y0=y0, bar_h=bar_h, fill=fill, outline=outline
-        )
-        max_inner = int(x1 - x0 - 2 * _CELL_INNER_PAD)
+        is_past = span["end"] < today
+        _draw_bar(draw, x0=x0, x1=x1, y0=y0, bar_h=bar_h, fill=_bar_fill(is_past))
+        inset = _bar_label_inset(bar_h)
+        max_inner = int(x1 - x0 - 2 * inset)
         if max_inner <= 0:
             continue
-        inner_left = int(x0 + _CELL_INNER_PAD)
-        _draw_multiday_bar_label(
+        _draw_bar_label(
             draw,
             img=img,
-            inner_left=inner_left,
+            inner_left=int(x0 + inset),
             max_inner=max_inner,
-            span=m,
+            span=span,
             fonts=fonts,
             line_top=y0,
-            muted=is_past_span,
+            bar_h=bar_h,
+            muted=is_past,
         )
-
-    bars_per_col = bars_per_column_from_annotated(annotated)
     return [
-        _reserved_px_for_column_bar_count(bars_per_col[i], bar_h, bar_gap)
-        for i in range(_GRID_COLUMNS)
+        float(k * bar_h + (k - 1) * _BAR_GAP) if k else 0.0 for k in _bars_per_column(annotated)
     ]
 
 
-def _draw_day_cell_chrome(
+def _draw_day_chrome(
     draw: ImageDraw.ImageDraw,
     *,
     cell_left: float,
@@ -486,104 +264,305 @@ def _draw_day_cell_chrome(
     fonts: MonthFonts,
     today: date,
 ) -> None:
-    """Background, grid outline, and day-of-month number (no events)."""
-    is_weekend = day_index in _WEEKEND_COLUMNS
-    is_today = d == today
-    if is_today:
-        cell_fill = _TODAY_CELL_BG
-    else:
-        cell_fill = _WEEKEND_CELL_BG if is_weekend else _WEEKDAY_CELL_BG
-    draw.rectangle(
-        [cell_left, cell_top, cell_right, cell_top + row_h],
-        fill=cell_fill,
-        outline=_GRID_LINE,
-        width=1,
-    )
-
-    if is_today:
-        inset = 1.0
-        draw.rectangle(
-            [
-                cell_left + inset,
-                cell_top + inset,
-                cell_right - inset,
-                cell_top + row_h - inset,
-            ],
-            outline=_TODAY_OUTLINE,
-            width=2,
-        )
-
-    draw.text(
-        (cell_left + _CELL_INNER_PAD, cell_top + _DAY_NUMBER_TOP_PAD),
-        str(d.day),
-        fill=_DAY_IN_MONTH,
-        font=fonts.day_number,
+    """Hairline column separator and the day number."""
+    if day_index > 0:
+        draw.rectangle([cell_left, cell_top, cell_left, cell_top + row_h], fill=_GRID_LINE)
+    _draw_day_heading(
+        draw,
+        cell_left=cell_left,
+        cell_right=cell_right,
+        cell_top=cell_top,
+        d=d,
+        fonts=fonts,
+        today=today,
     )
 
 
-def _draw_day_cell_events(
+def _hhmm_minutes(value: str) -> int | None:
+    """``HH:MM`` as minutes from midnight. ``24:00`` is allowed as an end."""
+    parts = value.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        hour, minute = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    if hour == 24 and minute == 0:
+        return 24 * 60
+    if not (0 <= hour <= 23 and 0 <= minute < 60):
+        return None
+    return hour * 60 + minute
+
+
+def _event_span_minutes(item: Any) -> tuple[int, int] | None:
+    """Start and end minutes for a timed event, or None when it has no clock time."""
+    if not isinstance(item, dict):
+        return None
+    raw = item.get("time")
+    if not raw:
+        return None
+    start = _hhmm_minutes(str(raw))
+    if start is None:
+        return None
+    end_raw = item.get("end_time")
+    end = _hhmm_minutes(str(end_raw)) if end_raw else None
+    if end is None or end <= start:
+        end = min(24 * 60, start + 60)
+    return start, end
+
+
+def _snap_half_hour(start: int, end: int) -> tuple[int, int]:
+    """Floor the start and ceil the end onto a 30-minute grid. At least 30 minutes."""
+    snapped_start = (start // 30) * 30
+    snapped_end = ((end + 29) // 30) * 30
+    if snapped_end <= snapped_start:
+        snapped_end = snapped_start + 30
+    return snapped_start, min(snapped_end, 24 * 60)
+
+
+def _hour_window(
+    events_by_day: dict[date, list[Any]],
+    visible: set[date],
+) -> tuple[int, int] | None:
+    """Inclusive start hour and exclusive end hour for one week.
+
+    Every day in the week uses this scale. It begins at the whole hour at or
+    before the earliest timed start that week, and runs through the hour that
+    contains the latest snapped end.
+    """
+    spans: list[tuple[int, int]] = []
+    for day, items in events_by_day.items():
+        if day not in visible:
+            continue
+        for item in items:
+            raw = _event_span_minutes(item)
+            if raw is not None:
+                spans.append(_snap_half_hour(*raw))
+    if not spans:
+        return None
+    start_min = min(start for start, _end in spans)
+    end_min = max(end for _start, end in spans)
+    return _hours_covering(start_min, end_min)
+
+
+def _hours_covering(start_min: int, end_min: int) -> tuple[int, int]:
+    """Inclusive start hour and exclusive end hour covering ``[start_min, end_min)``."""
+    start_hour = start_min // 60
+    end_hour = (end_min + 59) // 60
+    if end_hour <= start_hour:
+        end_hour = start_hour + 1
+    return start_hour, end_hour
+
+
+def _draw_timed_block(
     draw: ImageDraw.ImageDraw,
     *,
     img: Image.Image,
-    cell_left: float,
-    cell_top: float,
-    col_w: float,
-    row_h: float,
-    d: date,
-    events_by_day: dict[date, list[Any]],
-    fonts: MonthFonts,
-    today: date,
-    reserved_top: float,
+    box: tuple[float, float, float, float],
+    item: Any,
+    font_regular: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    font_bold: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    muted: bool,
 ) -> None:
-    """Single-day event lines inside one cell (below multiday bars when ``reserved_top`` > 0)."""
-    is_past = d < today
-    day_items = events_by_day.get(d, [])
-    if not day_items:
+    """Grey event card with a dark left edge. Text is the clock, title, and place."""
+    x0, y0, x1, y1 = box
+    if x1 - x0 < 6 or y1 - y0 < 6:
         return
-
-    _draw_events_in_cell(
-        draw,
-        img=img,
-        cell_left=cell_left,
-        cell_top=cell_top,
-        column_width=col_w,
-        row_height=row_h,
-        items=day_items,
-        fonts=fonts,
-        muted=is_past,
-        reserved_top=reserved_top,
+    accent_w = _TIMED_BLOCK_ACCENT_WIDTH
+    radius = max(2, min(_TIMED_BLOCK_RADIUS, int((y1 - y0) / 2), int((x1 - x0) / 2)))
+    draw.rounded_rectangle(
+        [x0, y0, x1, y1],
+        radius=radius,
+        fill=_TIMED_BLOCK_ACCENT_PAST if muted else _TIMED_BLOCK_ACCENT,
     )
+    draw.rounded_rectangle(
+        [x0 + accent_w, y0, x1, y1],
+        radius=radius,
+        fill=_TIMED_BLOCK_FILL_PAST if muted else _TIMED_BLOCK_FILL,
+        corners=(False, True, True, False),
+    )
+    pad = 1 if (y1 - y0) < 28 else 2
+    text_x = x0 + accent_w + pad
+    max_w = max(1, int(x1 - text_x) - pad)
+    inner_h = (y1 - y0) - 2 * pad
+    title_h = _line_box(font_bold)
+    if inner_h < title_h * _TITLE_FIT:
+        return
+    time_part, title_part = _event_time_and_title(item)
+    location = _event_location(item)
+    lines: list[tuple[str, ImageFont.FreeTypeFont | ImageFont.ImageFont, tuple[int, int, int]]] = []
+    title_fill = _EVENT_TITLE_PAST if muted else _EVENT_TITLE
+    time_fill = _EVENT_TIME_PAST if muted else _EVENT_TIME
+    loc_fill = _EVENT_LOCATION_PAST if muted else _EVENT_LOCATION
+    meta_h = _line_box(font_regular)
+    used = 0
+    if time_part and meta_h + title_h * _TITLE_FIT <= inner_h:
+        lines.append((time_part, font_regular, time_fill))
+        used = meta_h
+    lines.append((title_part, font_bold, title_fill))
+    used += title_h
+    if location and used + meta_h * _TITLE_FIT <= inner_h:
+        lines.append((location, font_regular, loc_fill))
+    text_y = y0 + pad
+    for text, font, fill in lines:
+        draw_line(
+            draw,
+            (text_x, int(text_y) + _ascent(font)),
+            truncate_line(draw, text, font=font, max_w=max_w),
+            image=img,
+            font=font,
+            fill=fill,
+            anchor="ls",
+        )
+        text_y += _line_box(font)
 
 
-def _month_section_title_font(fonts: MonthFonts) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Slightly smaller than ``fonts.header`` for month block titles."""
-    return _calendar_font_regular(max(14, int(fonts.header_px * 0.78)))
+def _allday_band_rows(
+    week: tuple[date, ...],
+    spans: list[dict[str, Any]],
+    events_by_day: dict[date, list[Any]],
+) -> int:
+    """Tallest stack of multiday bars plus single-day timeless items in ``week``."""
+    counts = _bars_per_column(_week_bar_segments(week, spans))
+    rows = 0
+    for index, day in enumerate(week):
+        timeless = sum(
+            1 for item in events_by_day.get(day, []) if _event_span_minutes(item) is None
+        )
+        rows = max(rows, counts[index] + timeless)
+    return rows
 
 
-def _month_block_lead_height(fonts: MonthFonts) -> float:
-    """Height for month title + air below (uses long name for a stable row budget)."""
-    font = _month_section_title_font(fonts)
-    d = ImageDraw.Draw(Image.new("RGB", (2, 2)))
-    sample = "September"
-    d.text((0, 0), sample, font=font, fill=0, anchor="lt")
-    b = d.textbbox((0, 0), sample, font=font, anchor="lt")
-    th = float(b[3] - b[1])
-    return th + 2.0 + 4.0
+def _event_font_px(half_h: float) -> int:
+    """Largest bold title whose glyphs fit a half-hour card (descenders may use the padding)."""
+    inner = half_h - 4.0
+    for px in range(20, 12, -1):
+        if _line_box(_calendar_font_bold(px)) * _TITLE_FIT <= inner:
+            return px
+    return 12
 
 
-def _draw_month_block_header(
+def _clock_minutes(raw_now: Any) -> int:
+    """Minutes from midnight for the device clock. Falls back to the host clock."""
+    if raw_now:
+        try:
+            parsed = datetime.fromisoformat(str(raw_now))
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            return parsed.hour * 60 + parsed.minute
+    local = datetime.now().astimezone()
+    return local.hour * 60 + local.minute
+
+
+def _half_hour_slot(minutes: int) -> tuple[int, int]:
+    """``[start, end)`` minutes for the 30-minute block that contains ``minutes``."""
+    start = (minutes // 30) * 30
+    return start, min(24 * 60, start + 30)
+
+
+def _window_including_slot(
+    window: tuple[int, int] | None,
+    slot: tuple[int, int],
+) -> tuple[int, int]:
+    """Grow an hour window so the current half-hour is on the grid."""
+    start_min, end_min = slot
+    grown = _hours_covering(start_min, end_min)
+    if window is None:
+        return grown
+    return min(window[0], grown[0]), max(window[1], grown[1])
+
+
+def _now_line(
+    *,
+    week: tuple[date, ...],
+    today: date,
+    window: tuple[int, int] | None,
+    hour_origin: float,
+    hour_h: float,
+    y0: float,
+    origin: float,
+    col_w: float,
+    now_slot: tuple[int, int],
+) -> tuple[float, float, float] | None:
+    """``(left, right, y)`` of the current half-hour on today's column, or None."""
+    if window is None or hour_h <= 0 or today not in week:
+        return None
+    start, end = now_slot
+    grid_start = window[0] * 60
+    grid_end = window[1] * 60
+    if end <= grid_start or start >= grid_end:
+        return None
+    day_index = week.index(today)
+    left = origin + day_index * col_w
+    right = origin + (day_index + 1) * col_w
+    hour_top = y0 + hour_origin
+    y_start = hour_top + (max(start, grid_start) - grid_start) / 60.0 * hour_h
+    y_end = hour_top + (min(end, grid_end) - grid_start) / 60.0 * hour_h
+    if y_end - y_start < 1:
+        return None
+    return left, right, y_start
+
+
+def _text_height(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+) -> float:
+    box = draw.textbbox((0, 0), text, font=font, anchor="lt")
+    return float(box[3] - box[1])
+
+
+def _draw_day_heading(
     draw: ImageDraw.ImageDraw,
     *,
-    pad: int,
-    y0: float,
-    month_name: str,
-    lead_h: float,
+    cell_left: float,
+    cell_right: float,
+    cell_top: float,
+    d: date,
     fonts: MonthFonts,
-) -> float:
-    """Draw month title only; return ``y0 + lead_h`` (start of this block's first week)."""
-    tfont = _month_section_title_font(fonts)
-    draw.text((pad, y0 + 2.0), month_name, font=tfont, fill=_HEADER_TEXT, anchor="lt")
-    return y0 + lead_h
+    today: date,
+) -> None:
+    """Day number, today capsule, and a month tag on the 1st."""
+    x = cell_left + _CELL_INNER_PAD
+    y = cell_top + _DAY_NUMBER_TOP_PAD
+    num = str(d.day)
+    font = fonts.day_number
+    is_today = d == today
+    is_past = d < today
+    if is_today:
+        bb = draw.textbbox((x, y), num, font=font)
+        inset_x = max(3, fonts.daynum_px // 6)
+        inset_y = max(1, fonts.daynum_px // 10)
+        pill = [bb[0] - inset_x, bb[1] - inset_y, bb[2] + inset_x, bb[3] + inset_y]
+        radius = max(4, int((pill[3] - pill[1]) / 2))
+        draw.rounded_rectangle(pill, radius=radius, fill=_TODAY_PILL)
+        draw.text((x, y), num, font=font, fill=_TODAY_PILL_TEXT)
+        tag_x = float(pill[2]) + 6.0
+    else:
+        draw.text(
+            (x, y),
+            num,
+            font=font,
+            fill=_DAY_NUMBER_PAST if is_past else _DAY_IN_MONTH,
+        )
+        bb = draw.textbbox((x, y), num, font=font)
+        tag_x = float(bb[2]) + 6.0
+
+    if d.day != 1:
+        return
+    tag = calendar.month_abbr[d.month]
+    tag_w = float(draw.textlength(tag, font=fonts.meta))
+    if tag_x + tag_w > cell_right - _CELL_INNER_PAD:
+        return
+    tag_bb = draw.textbbox((0, 0), tag, font=fonts.meta)
+    tag_y = float(bb[3]) - float(tag_bb[3])
+    draw.text(
+        (tag_x, tag_y),
+        tag,
+        font=fonts.meta,
+        fill=_MONTH_TAG if is_today or not is_past else _MONTH_TAG_PAST,
+    )
 
 
 def _draw_ics_error_banner(
@@ -591,12 +570,13 @@ def _draw_ics_error_banner(
     *,
     img: Image.Image,
     width: int,
+    height: int,
     grid_top: float,
     message: str,
     fonts: MonthFonts,
 ) -> None:
-    msg_px = max(12, fonts.title_px // 2)
-    msg_font = _calendar_font_regular(msg_px)
+    header_px = max(18, min(min(width, height) // 22, 32))
+    msg_font = _calendar_font_regular(max(12, header_px // 2))
     text = message or "Could not load calendar."
     wrapped = truncate_line(
         draw,
@@ -622,7 +602,7 @@ def render_month_image(
     height: int,
     data: dict[str, Any],
 ) -> Image.Image:
-    """Raster month view suitable for Pillow + dithering (no PNG round-trip)."""
+    """Raster two-week view suitable for Pillow + dithering (no PNG round-trip)."""
     ok = bool(data.get("ok"))
     err = str(data.get("error", ""))
     events_by_day = _events_by_day_from_payload(data.get("events_by_day"))
@@ -635,90 +615,205 @@ def render_month_image(
             today = date.today()
     else:
         today = date.today()
+    now_slot = _half_hour_slot(_clock_minutes(data.get("now")))
 
     img = Image.new("RGB", (width, height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
     fonts = MonthFonts.for_canvas(width, height)
-    col_w = (width - 2.0 * fonts.pad) / 7.0
+    pad = fonts.pad
 
     weeks, _ = rolling_weeks_and_visible(today)
     n_weeks = len(weeks)
-    month_blocks = _group_weeks_by_week_start_month(weeks)
-    n_blocks = len(month_blocks)
-    inter = _MONTH_INTER_BLOCK_GAP
-    lead = _month_block_lead_height(fonts)
-    block_overhead = lead * n_blocks + inter * max(0, n_blocks - 1)
-    grid_h = float(height) - 2.0 * fonts.pad
-    row_h = (grid_h - block_overhead) / float(n_weeks) if n_weeks else grid_h
+    dow_h = _text_height(draw, "WED", fonts.dow)
+    band_h = dow_h + 2.0 * max(4.0, fonts.dow_px / 3.0)
+    rule_h = 1.0
+    gaps = _WEEK_GAP * max(0, n_weeks - 1)
+    grid_h = float(height) - 2.0 * pad - band_h - rule_h - gaps
+    row_h = grid_h / float(n_weeks) if n_weeks else grid_h
 
     if not ok:
         _draw_ics_error_banner(
-            draw, img=img, width=width, grid_top=fonts.pad, message=err, fonts=fonts
+            draw,
+            img=img,
+            width=width,
+            height=height,
+            grid_top=float(pad),
+            message=err,
+            fonts=fonts,
         )
         return img
 
-    bar_h = _multiday_lane_height_px(fonts)
-    bar_gap = 0
+    bar_h = fonts.event_line_step
+    header_h = float(_cell_content_top_y(0.0, fonts))
 
-    def _draw_one_week(week: tuple[date, ...], y0: float) -> None:
-        p, wk = fonts.pad, tuple(week)
-        for day_index, d in enumerate(week):
-            cl = p + day_index * col_w
-            cr = p + (day_index + 1) * col_w
-            _draw_day_cell_chrome(
+    def _scale_for_week(week: tuple[date, ...]) -> tuple[tuple[int, int] | None, float, float, int]:
+        """Hour window, top of the grid, row height, and hour count for this week."""
+        window = _hour_window(events_by_day, set(week))
+        if today in week:
+            window = _window_including_slot(window, now_slot)
+        band_rows = _allday_band_rows(week, multiday_spans, events_by_day)
+        hour_origin = header_h + band_rows * (bar_h + _BAR_GAP)
+        n_hours = (window[1] - window[0]) if window else 0
+        hour_h = (row_h - hour_origin) / n_hours if n_hours else 0.0
+        return window, hour_origin, hour_h, n_hours
+
+    week_scales = [_scale_for_week(tuple(week)) for week in weeks]
+    shortest = min((scale[2] for scale in week_scales if scale[2] > 0), default=0.0)
+    # One event size for both weeks, taken from the tighter hour row so titles match.
+    half_h = shortest / 2.0
+    block_px = _event_font_px(half_h) if shortest else 14
+    block_regular = _calendar_font_regular(max(10, block_px - 2))
+    block_bold = _calendar_font_bold(block_px)
+    hour_font = _calendar_font_regular(max(12, min(15, int(shortest * 0.36) if shortest else 13)))
+    gutter = int(draw.textlength("00", font=hour_font)) + 8 if shortest else 0
+    origin = float(pad + gutter)
+    col_w = (width - pad - origin) / 7.0
+
+    y = float(pad)
+    today_index = today.weekday() if weeks and weeks[0][0] <= today <= weeks[-1][6] else -1
+    for day_index, name in enumerate(_WEEKDAYS):
+        draw.text(
+            (origin + day_index * col_w + _CELL_INNER_PAD, y + band_h / 2.0 + 3),
+            name.upper(),
+            font=fonts.dow,
+            fill=_WEEKDAY_LABEL_TODAY if day_index == today_index else _WEEKDAY_LABEL,
+            anchor="lm",
+        )
+    y += band_h
+    draw.rectangle([origin, y, width - pad, y], fill=_HEADER_RULE)
+    y += rule_h
+
+    def _draw_one_week(
+        week: tuple[date, ...],
+        y0: float,
+        scale: tuple[tuple[int, int] | None, float, float, int],
+    ) -> None:
+        window, hour_origin, hour_h, n_hours = scale
+        wk = tuple(week)
+        for day_index, day in enumerate(week):
+            left = origin + day_index * col_w
+            right = origin + (day_index + 1) * col_w
+            _draw_day_chrome(
                 draw,
-                cell_left=cl,
+                cell_left=left,
                 cell_top=y0,
-                cell_right=cr,
+                cell_right=right,
                 row_h=row_h,
                 day_index=day_index,
-                d=d,
+                d=day,
                 fonts=fonts,
                 today=today,
             )
-        reserved = _draw_multiday_bars_for_week(
+        if window and hour_h > 0:
+            hour_top = y0 + hour_origin
+            for step in range(n_hours):
+                line_y = hour_top + step * hour_h
+                draw.rectangle([origin, line_y, width - pad, line_y], fill=_HOUR_LINE)
+                draw.text(
+                    (origin - 6, line_y),
+                    f"{window[0] + step:02d}",
+                    font=hour_font,
+                    fill=_HOUR_LABEL,
+                    anchor="rm",
+                )
+        now = _now_line(
+            week=wk,
+            today=today,
+            window=window,
+            hour_origin=hour_origin,
+            hour_h=hour_h,
+            y0=y0,
+            origin=origin,
+            col_w=col_w,
+            now_slot=now_slot,
+        )
+        reserved = _draw_bars_for_week(
             draw,
             img=img,
             week=wk,
             cell_top=y0,
-            pad=p,
+            pad=int(origin),
             col_w=col_w,
             fonts=fonts,
             spans=multiday_spans,
             today=today,
             bar_h=bar_h,
-            bar_gap=bar_gap,
         )
-        for day_index, d in enumerate(week):
-            cl = p + day_index * col_w
-            _draw_day_cell_events(
-                draw,
-                img=img,
-                cell_left=cl,
-                cell_top=y0,
-                col_w=col_w,
-                row_h=row_h,
-                d=d,
-                events_by_day=events_by_day,
-                fonts=fonts,
-                today=today,
-                reserved_top=reserved[day_index],
+        for day_index, day in enumerate(week):
+            left = origin + day_index * col_w
+            right = origin + (day_index + 1) * col_w
+            muted = day < today
+            timeless_items = [
+                item for item in events_by_day.get(day, []) if _event_span_minutes(item) is None
+            ]
+            bar_top = float(_cell_content_top_y(y0, fonts) + reserved[day_index])
+            if reserved[day_index]:
+                bar_top += _BAR_GAP
+            for offset, item in enumerate(timeless_items):
+                y_bar = bar_top + offset * (bar_h + _BAR_GAP)
+                _draw_bar(
+                    draw,
+                    x0=left + 2,
+                    x1=right - 2,
+                    y0=y_bar,
+                    bar_h=bar_h,
+                    fill=_bar_fill(muted),
+                )
+                inset = _bar_label_inset(bar_h)
+                _draw_bar_label(
+                    draw,
+                    img=img,
+                    inner_left=int(left + 2 + inset),
+                    max_inner=max(1, int(right - left - 4 - 2 * inset)),
+                    span=item if isinstance(item, dict) else {"title": str(item)},
+                    fonts=fonts,
+                    line_top=y_bar,
+                    bar_h=bar_h,
+                    muted=muted,
+                )
+            if not window or hour_h <= 0:
+                continue
+            raw_spans = [
+                (*_snap_half_hour(*raw), item)
+                for item in events_by_day.get(day, [])
+                if (raw := _event_span_minutes(item)) is not None
+            ]
+            placed, lane_count = _pack_lanes(raw_spans, inclusive=False)
+            if lane_count == 0:
+                continue
+            hour_top = y0 + hour_origin
+            grid_start = window[0] * 60
+            lane_w = (col_w - 4.0) / lane_count
+            cell_bottom = y0 + row_h - 1
+            for start, end, item, lane in placed:
+                y_start = hour_top + (start - grid_start) / 60.0 * hour_h
+                y_end = hour_top + (end - grid_start) / 60.0 * hour_h
+                _draw_timed_block(
+                    draw,
+                    img=img,
+                    box=(
+                        left + 2 + lane * lane_w + 1,
+                        y_start + 1,
+                        left + 2 + (lane + 1) * lane_w - 1,
+                        min(y_end - 1, cell_bottom),
+                    ),
+                    item=item,
+                    font_regular=block_regular,
+                    font_bold=block_bold,
+                    muted=muted,
+                )
+        if now is not None:
+            slot_left, slot_right, slot_top = now
+            radius = float(_NOW_DOT_RADIUS)
+            cy = slot_top + 0.5
+            draw.rectangle([slot_left, slot_top, slot_right, slot_top + 1], fill=_NOW_RULE)
+            draw.ellipse(
+                [slot_left - radius, cy - radius, slot_left + radius, cy + radius],
+                fill=_NOW_RULE,
             )
 
-    y = float(fonts.pad)
-    for bi, (ym, wlist) in enumerate(month_blocks):
-        if bi > 0:
-            y += inter
-        y = _draw_month_block_header(
-            draw,
-            pad=fonts.pad,
-            y0=y,
-            month_name=calendar.month_name[ym[1]],
-            lead_h=lead,
-            fonts=fonts,
-        )
-        for week in wlist:
-            _draw_one_week(week, y)
-            y += row_h
+    for week, scale in zip(weeks, week_scales, strict=True):
+        _draw_one_week(week, y, scale)
+        y += row_h + _WEEK_GAP
 
     return img
