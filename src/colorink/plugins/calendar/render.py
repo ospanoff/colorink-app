@@ -30,14 +30,18 @@ from colorink.plugins.calendar.layout import (
     _week_bar_segments,
 )
 from colorink.plugins.calendar.palette import (
+    _ALLDAY_TIMED_GAP,
     _BAR_FILL,
     _BAR_FILL_PAST,
     _BAR_GAP,
     _BAR_TOP_INSET,
     _CELL_INNER_PAD,
+    _CURRENT_WEEK_MIN_SHARE,
     _DAY_IN_MONTH,
     _DAY_NUMBER_PAST,
     _DAY_NUMBER_TOP_PAD,
+    _DENSE_BOTTOM_PAD,
+    _DENSE_CARD_GAP,
     _ERROR_TEXT,
     _EVENT_LOCATION,
     _EVENT_LOCATION_PAST,
@@ -433,26 +437,129 @@ def _draw_timed_block(
         text_y += _line_box(font)
 
 
+def _band_px(rows: int, bar_h: int) -> float:
+    """Height of an all-day stack plus the space before timed events below it."""
+    if rows <= 0:
+        return 0.0
+    return float(_BAR_TOP_INSET + rows * bar_h + (rows - 1) * _BAR_GAP + _ALLDAY_TIMED_GAP)
+
+
+def _column_band_rows(
+    week: tuple[date, ...],
+    spans: list[dict[str, Any]],
+    events_by_day: dict[date, list[Any]],
+) -> list[int]:
+    """All-day rows in each column: multiday lanes plus single-day timeless items."""
+    counts = _bars_per_column(_week_bar_segments(week, spans))
+    rows: list[int] = []
+    for index, day in enumerate(week):
+        timeless = sum(
+            1 for item in events_by_day.get(day, []) if _event_span_minutes(item) is None
+        )
+        rows.append(counts[index] + timeless)
+    return rows
+
+
 def _allday_band_rows(
     week: tuple[date, ...],
     spans: list[dict[str, Any]],
     events_by_day: dict[date, list[Any]],
 ) -> int:
     """Tallest stack of multiday bars plus single-day timeless items in ``week``."""
-    counts = _bars_per_column(_week_bar_segments(week, spans))
-    rows = 0
+    return max(_column_band_rows(week, spans, events_by_day), default=0)
+
+
+def _timed_on_day(
+    events_by_day: dict[date, list[Any]],
+    day: date,
+) -> list[tuple[int, Any]]:
+    """Timed events on ``day``, snapped and ordered by start."""
+    items = [
+        (_snap_span(*raw)[0], item)
+        for item in events_by_day.get(day, [])
+        if (raw := _event_span_minutes(item)) is not None
+    ]
+    items.sort(key=lambda pair: pair[0])
+    return items
+
+
+def _stack_px(count: int, card_h: float) -> float:
+    """Height of ``count`` packed cards, including the gaps between them."""
+    if count <= 0:
+        return 0.0
+    return count * card_h + (count - 1) * _DENSE_CARD_GAP
+
+
+def _dense_week_height(
+    week: tuple[date, ...],
+    events_by_day: dict[date, list[Any]],
+    spans: list[dict[str, Any]],
+    *,
+    header_h: float,
+    bar_h: int,
+    card_h: float,
+) -> float:
+    """Height of a packed week: the tallest column of pills plus its own cards."""
+    bands = _column_band_rows(week, spans, events_by_day)
+    height = header_h
     for index, day in enumerate(week):
-        timeless = sum(
-            1 for item in events_by_day.get(day, []) if _event_span_minutes(item) is None
+        stack = _stack_px(len(_timed_on_day(events_by_day, day)), card_h)
+        height = max(height, header_h + _band_px(bands[index], bar_h) + stack)
+    return height + _DENSE_BOTTOM_PAD
+
+
+def _is_current_week(week: tuple[date, ...], today: date) -> bool:
+    return week[0] <= today <= week[6]
+
+
+def _row_heights(
+    weeks: list[tuple[date, ...]],
+    events_by_day: dict[date, list[Any]],
+    spans: list[dict[str, Any]],
+    *,
+    today: date,
+    grid_h: float,
+    header_h: float,
+    bar_h: int,
+    card_h: float,
+) -> tuple[list[bool], list[float]]:
+    """Which weeks keep the hour grid, and how tall each week row is.
+
+    The week that contains today stays on the hour scale and receives the space
+    the packed weeks do not use. A packed week cannot shrink the hour grid
+    below ``_CURRENT_WEEK_MIN_SHARE``.
+    """
+    current = [_is_current_week(week, today) for week in weeks]
+    if weeks and not any(current):
+        current[0] = True
+    dense = [
+        0.0
+        if flag
+        else _dense_week_height(
+            week,
+            events_by_day,
+            spans,
+            header_h=header_h,
+            bar_h=bar_h,
+            card_h=card_h,
         )
-        rows = max(rows, counts[index] + timeless)
-    return rows
+        for week, flag in zip(weeks, current, strict=True)
+    ]
+    n_current = sum(current)
+    dense_sum = sum(dense)
+    current_floor = grid_h * _CURRENT_WEEK_MIN_SHARE if n_current else 0.0
+    if dense_sum > grid_h - current_floor and dense_sum > 0:
+        factor = max(0.0, grid_h - current_floor) / dense_sum
+        dense = [height_px * factor for height_px in dense]
+    current_h = (grid_h - sum(dense)) / n_current if n_current else grid_h
+    heights = [current_h if flag else dense[index] for index, flag in enumerate(current)]
+    return current, heights
 
 
 def _event_font_px(slot_h: float) -> int:
     """Largest bold title that fits in ``slot_h`` (descenders may use the padding)."""
     inner = slot_h - 4.0
-    for px in range(20, 12, -1):
+    for px in range(28, 12, -1):
         if _line_box(_calendar_font_bold(px)) * _TITLE_FIT <= inner:
             return px
     return 12
@@ -498,6 +605,33 @@ def _now_line(
     right = origin + (day_index + 1) * col_w
     y = _grid_y(y0 + hour_origin, mark - grid_start, hour_h)
     return left, right, y
+
+
+def _draw_next_week_rule(
+    draw: ImageDraw.ImageDraw,
+    *,
+    gap_top: float,
+    origin: float,
+    right: float,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+) -> None:
+    """Hairline in the week gap, with the section label sitting on the rule."""
+    rule_y = gap_top + _WEEK_GAP / 2.0
+    label = "NEXT WEEK"
+    text_w = draw.textlength(label, font=font)
+    box = draw.textbbox((0, 0), label, font=font, anchor="lm")
+    text_h = box[3] - box[1]
+    draw.rectangle([origin, rule_y, right, rule_y], fill=_HEADER_RULE)
+    draw.rectangle(
+        [
+            origin - 2,
+            rule_y - text_h / 2.0 - 1,
+            origin + text_w + 8,
+            rule_y + text_h / 2.0 + 1,
+        ],
+        fill=(255, 255, 255),
+    )
+    draw.text((origin, rule_y), label, font=font, fill=_WEEKDAY_LABEL, anchor="lm")
 
 
 def _text_height(
@@ -625,7 +759,6 @@ def render_month_image(
     rule_h = 1.0
     gaps = _WEEK_GAP * max(0, n_weeks - 1)
     grid_h = float(height) - 2.0 * pad - band_h - rule_h - gaps
-    row_h = grid_h / float(n_weeks) if n_weeks else grid_h
 
     if not ok:
         _draw_ics_error_banner(
@@ -641,25 +774,45 @@ def render_month_image(
 
     bar_h = fonts.event_line_step
     header_h = float(_cell_content_top_y(0.0, fonts))
+    # Compact cards for the week that is not on the hour scale.
+    dense_card_h = float(4 + _line_box(fonts.event_regular) + _line_box(fonts.event_bold))
+    current_flags, row_heights = _row_heights(
+        weeks,
+        events_by_day,
+        multiday_spans,
+        today=today,
+        grid_h=grid_h,
+        header_h=header_h,
+        bar_h=bar_h,
+        card_h=dense_card_h,
+    )
 
-    def _scale_for_week(week: tuple[date, ...]) -> tuple[tuple[int, int] | None, float, float, int]:
+    def _scale_for_week(
+        week: tuple[date, ...],
+        week_h: float,
+    ) -> tuple[tuple[int, int] | None, float, float, int]:
         """Hour window, top of the grid, row height, and hour count for this week."""
         window = _hour_window(events_by_day, set(week))
         band_rows = _allday_band_rows(week, multiday_spans, events_by_day)
-        hour_origin = header_h + band_rows * (bar_h + _BAR_GAP)
+        hour_origin = header_h + _band_px(band_rows, bar_h)
         n_hours = (window[1] - window[0]) if window else 0
-        hour_h = (row_h - hour_origin) / n_hours if n_hours else 0.0
+        hour_h = (week_h - hour_origin) / n_hours if n_hours else 0.0
         return window, hour_origin, hour_h, n_hours
 
-    week_scales = [_scale_for_week(tuple(week)) for week in weeks]
-    shortest = min((scale[2] for scale in week_scales if scale[2] > 0), default=0.0)
-    # One event size for both weeks, taken from the tighter hour row so titles match.
-    half_h = shortest / 2.0
-    block_px = _event_font_px(half_h) if shortest else 14
+    week_scales = [
+        _scale_for_week(tuple(week), row_heights[i]) if current_flags[i] else (None, 0.0, 0.0, 0)
+        for i, week in enumerate(weeks)
+    ]
+    hour_rows = [scale[2] for scale, flag in zip(week_scales, current_flags, strict=True) if flag]
+    current_hour_h = min((row for row in hour_rows if row > 0), default=0.0)
+    # Titles grow with the current week's hour row, which now owns most of the canvas.
+    block_px = _event_font_px(current_hour_h / 2.0) if current_hour_h else 14
     block_regular = _calendar_font_regular(max(10, block_px - 2))
     block_bold = _calendar_font_bold(block_px)
-    hour_font = _calendar_font_regular(max(12, min(15, int(shortest * 0.36) if shortest else 13)))
-    gutter = int(draw.textlength("00", font=hour_font)) + 8 if shortest else 0
+    hour_font = _calendar_font_regular(
+        max(12, min(18, int(current_hour_h * 0.32) if current_hour_h else 13))
+    )
+    gutter = int(draw.textlength("00", font=hour_font)) + 8 if current_hour_h else 0
     origin = float(pad + gutter)
     col_w = (width - pad - origin) / 7.0
 
@@ -677,10 +830,37 @@ def render_month_image(
     draw.rectangle([origin, y, width - pad, y], fill=_HEADER_RULE)
     y += rule_h
 
+    def _draw_dense_cards(week: tuple[date, ...], y0: float, week_h: float) -> None:
+        """Stack each day's timed events under that day's all-day pills, in start order."""
+        bands = _column_band_rows(week, multiday_spans, events_by_day)
+        cell_bottom = y0 + week_h - 1
+        for day_index, day in enumerate(week):
+            left = origin + day_index * col_w
+            right = origin + (day_index + 1) * col_w
+            y_card = y0 + header_h + _band_px(bands[day_index], bar_h)
+            muted = day < today
+            for _start, item in _timed_on_day(events_by_day, day):
+                y_end = min(y_card + dense_card_h, cell_bottom)
+                if y_end - y_card < 6:
+                    break
+                _draw_timed_block(
+                    draw,
+                    img=img,
+                    box=(left + 3, y_card, right - 3, y_end),
+                    item=item,
+                    font_regular=fonts.event_regular,
+                    font_bold=fonts.event_bold,
+                    muted=muted,
+                )
+                y_card = y_end + _DENSE_CARD_GAP
+
     def _draw_one_week(
         week: tuple[date, ...],
         y0: float,
+        week_h: float,
         scale: tuple[tuple[int, int] | None, float, float, int],
+        *,
+        scaled: bool,
     ) -> None:
         window, hour_origin, hour_h, n_hours = scale
         wk = tuple(week)
@@ -692,7 +872,7 @@ def render_month_image(
                 cell_left=left,
                 cell_top=y0,
                 cell_right=right,
-                row_h=row_h,
+                row_h=week_h,
                 day_index=day_index,
                 d=day,
                 fonts=fonts,
@@ -765,7 +945,7 @@ def render_month_image(
                     bar_h=bar_h,
                     muted=muted,
                 )
-            if not window or hour_h <= 0:
+            if not scaled or not window or hour_h <= 0:
                 continue
             raw_spans = [
                 (*_snap_span(*raw), item)
@@ -778,7 +958,7 @@ def render_month_image(
             hour_top = y0 + hour_origin
             grid_start = window[0] * 60
             lane_w = (col_w - 4.0) / lane_count
-            cell_bottom = y0 + row_h - 1
+            cell_bottom = y0 + week_h - 1
             for start, end, item, lane in placed:
                 y_start = _grid_y(hour_top, start - grid_start, hour_h)
                 y_end = _grid_y(hour_top, end - grid_start, hour_h)
@@ -805,9 +985,22 @@ def render_month_image(
                 [line_left - radius, cy - radius, line_left + radius, cy + radius],
                 fill=_NOW_RULE,
             )
+        if not scaled:
+            _draw_dense_cards(wk, y0, week_h)
 
-    for week, scale in zip(weeks, week_scales, strict=True):
-        _draw_one_week(week, y, scale)
-        y += row_h + _WEEK_GAP
+    for index, (week, scale, week_h, scaled) in enumerate(
+        zip(weeks, week_scales, row_heights, current_flags, strict=True)
+    ):
+        _draw_one_week(week, y, week_h, scale, scaled=scaled)
+        next_is_dense = index + 1 < len(weeks) and not current_flags[index + 1]
+        if scaled and next_is_dense:
+            _draw_next_week_rule(
+                draw,
+                gap_top=y + week_h,
+                origin=origin,
+                right=float(width - pad),
+                font=fonts.meta,
+            )
+        y += week_h + _WEEK_GAP
 
     return img
